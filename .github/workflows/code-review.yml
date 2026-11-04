@@ -1,0 +1,34 @@
+name: code-review
+
+# Reviews every pull request with agentic-code-review-tool: the changed lines of the Python and the workflows, as a
+# PR review with inline comments and as diff annotations. The AI step
+# is off, so no model key is needed. Pull requests from forks get a read-only token: annotations, no review comment.
+on:
+  pull_request:
+
+# `shell: bash` runs steps with -eo pipefail; the default (-e only) lets `script | tee` pass when the script fails.
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: sunilmehta-si/agentic-code-review-tool@a60324703c95e34742c691b72887c4ce60d63265 # v0.11.0
+        with:
+          fail-on: high
+          ai: none
+          scanners: none
+          sarif-file: ""

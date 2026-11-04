@@ -1,0 +1,20 @@
+# Pinned action commits stay safe only while they are kept current: Dependabot opens weekly update pull requests. Each
+# update waits 14 days after a release, so a compromised or withdrawn release is usually found before it is proposed.
+# Security updates are not delayed. The package has no dependencies, so pip tracks only the build requirement.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
