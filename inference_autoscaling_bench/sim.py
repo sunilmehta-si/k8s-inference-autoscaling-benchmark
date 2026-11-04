@@ -148,13 +148,15 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
             ready = [p for p in pods if p.state == "ready"]
             pending = [p for p in pods if p.state == "pending"]
             timeline.append((now, len(ready), len(pending), state["running"], len(queue)))
+            if now == 0.0:
+                continue  # the autoscaler's first sync is one period after the start
             while arrivals and arrivals[0] <= now - RATE_WINDOW_S:
                 arrivals.popleft()
             window = min(now, RATE_WINDOW_S)
             obs = Observation(now, len(ready), len(pending), state["running"], len(queue), replica.slots,
                               len(arrivals) / window if window > 0 else 0.0)
             desired = policy.decide(obs, bounds)
-            if desired is None or now == 0.0:
+            if desired is None:
                 continue
             current = len(ready) + len(pending)
             if desired > current:

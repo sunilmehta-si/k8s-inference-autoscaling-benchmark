@@ -70,7 +70,7 @@ class ScalingTests(unittest.TestCase):
         r = run([(1.0, 400, 10)], Scripted(3, {15.0: 1}), sim.Replica(slots=1), duration=60)
         self.assertAlmostEqual(r.replica_seconds, 60 + 2 * 15)
 
-    def test_the_policy_is_not_asked_at_the_first_instant(self):
+    def test_the_first_sync_is_one_period_after_the_start(self):
         r = run([(1.0, 400, 10)], Scripted(1, {0.0: 5}))
         self.assertEqual(r.events, [])
 
