@@ -1,0 +1,62 @@
+import unittest
+
+from inference_autoscaling_bench import experiment, spec, workload
+from inference_autoscaling_bench.policies import Hpa, Static
+from tests.helpers import tiny_workload
+
+
+class ParseTests(unittest.TestCase):
+    def test_a_static_pool(self):
+        s = spec.parse("static-24")
+        self.assertEqual((s.label, s.replica.startup_s), ("static-24", 45.0))
+        self.assertIsInstance(s.make(), Static)
+        self.assertEqual(s.make().replicas, 24)
+
+    def test_an_hpa_with_every_default(self):
+        policy = spec.parse("hpa-concurrency").make()
+        self.assertIsInstance(policy, Hpa)
+        self.assertEqual((policy.signal, policy.target, policy.down_window_s), ("concurrency", 6.0, 300.0))
+
+    def test_options_reach_the_hpa_and_the_replica(self):
+        s = spec.parse("hpa-queue:target=2,down=60,up_pods=8,startup=120")
+        policy = s.make()
+        self.assertEqual((policy.target, policy.down_window_s, policy.up_pods), (2.0, 60.0, 8))
+        self.assertEqual(s.replica.startup_s, 120.0)
+
+    def test_a_label_names_the_policy_in_results(self):
+        s = spec.parse("slow=hpa-rps:startup=120")
+        self.assertEqual((s.label, s.make().name, s.replica.startup_s), ("slow", "slow", 120.0))
+
+    def test_an_unlabelled_variant_is_labelled_by_its_text(self):
+        self.assertEqual(spec.parse("hpa-queue:target=2").label, "hpa-queue:target=2")
+
+    def test_every_make_is_a_fresh_policy(self):
+        s = spec.parse("hpa-queue")
+        self.assertIsNot(s.make(), s.make())
+
+    def test_bad_specs_are_refused_with_a_reason(self):
+        for bad, reason in [("hpa-gpu", "unknown policy"), ("static-0", "at least one"), ("static-x", "pool size"),
+                            ("hpa-queue:nope=1", "unknown option"), ("hpa-queue:target", "key=value"),
+                            ("static-4:target=2", "no options"), ("hpa-queue:target=abc", "must be a number"),
+                            ("burst", "unknown policy")]:
+            with self.subTest(spec=bad), self.assertRaisesRegex(ValueError, reason):
+                spec.parse(bad)
+
+
+class MatrixTests(unittest.TestCase):
+    def test_every_policy_runs_on_every_seed_and_shares_the_trace(self):
+        w = tiny_workload()
+        rows, kept = experiment.run_matrix(w, [spec.parse("static-2"), spec.parse("hpa-queue")], [1, 2], keep_runs_for=1)
+        self.assertEqual([(r["policy"], r["seed"]) for r in rows],
+                         [("static-2", 1), ("hpa-queue", 1), ("static-2", 2), ("hpa-queue", 2)])
+        self.assertEqual(rows[0]["requests"], rows[1]["requests"])   # one trace per seed, whatever the policy
+        self.assertNotEqual(rows[0]["requests"], rows[2]["requests"])
+        self.assertEqual(sorted(kept), ["hpa-queue", "static-2"])
+
+    def test_two_policies_with_one_label_are_refused(self):
+        with self.assertRaises(ValueError):
+            experiment.run_matrix(tiny_workload(), [spec.parse("static-2"), spec.parse("static-2")], [1])
+
+
+if __name__ == "__main__":
+    unittest.main()
