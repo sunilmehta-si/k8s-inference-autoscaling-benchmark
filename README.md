@@ -102,10 +102,23 @@ Horizontal Pod Autoscaler, Prometheus and prometheus-adapter in front of simulat
 against something that is not the model. `iab compare` sets each cluster run beside the simulation on the same seed and
 settings. It runs in CI only: the scripts refuse any kubectl context but `kind-iab`.
 
+The first comparison is [results/cluster](results/cluster/README.md): the `burst` workload, four policies, three seeds each,
+twelve 30-minute runs. What it shows, and what it does not:
+
+- **Medians and scaling decisions agree.** Median first-token latency is within 60 ms of the simulation for every policy,
+  and `hpa-concurrency` and `hpa-queue` scale up as many times and to the same peak as the simulation.
+- **The tail does not.** The 95th-percentile first-token latency is higher on the cluster than in the simulation in all 12 runs.
+  Even `static-24`, which never scales, serves 97.7% within the objective on the cluster against 100% in the simulation.
+  The likely cause is that each pod keeps its own queue behind the Service, while the simulation has one shared queue.
+  That is a hypothesis; it has not been tested yet.
+- **The signal ranking changes.** The simulation puts `hpa-utilization` second and `hpa-queue` last. On the cluster
+  `hpa-queue` is second (70.3%) and `hpa-utilization` last (40.9%, peak 26 to 28 pods instead of 32). Why the cluster's
+  utilization signal under-scales is not explained yet, so treat the simulation's ranking of that policy with caution.
+
 ## Status
 
-The simulation, its seven datasets and the cluster stage's runner and comparison are built. The cluster results are
-being collected and are not in this repository yet. Not yet built: KEDA reading the same signals, a predictive policy,
+The simulation, its seven datasets, the cluster stage's runner and comparison, and the first cluster dataset are built.
+Not yet built: a per-pod queue in the simulation, to test the tail gap; an explanation of the utilization gap; KEDA reading the same signals, a predictive policy,
 and a workload with a gentler ramp, to find where reactive scaling is enough.
 
 ## Related projects
