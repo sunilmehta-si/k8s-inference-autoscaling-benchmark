@@ -9,7 +9,7 @@ from pathlib import Path
 import json
 import time
 
-from . import __version__, client as load_client, cluster, experiment, report, results, workload as workloads
+from . import __version__, client as load_client, cluster, compare, experiment, report, results, workload as workloads
 from .metrics import summarize
 from .policies import SIGNALS, Bounds
 from .sim import simulate
@@ -90,6 +90,14 @@ def cmd_cluster_run(args) -> int:
     return 0
 
 
+def cmd_compare(args) -> int:
+    w = workloads.load(args.workload)
+    doc = compare.build(args.title or f"The cluster against the simulation: {w.name}", w, compare.load_cluster_runs(args.cluster))
+    compare.write(args.out, doc)
+    print(f"{len(doc['rows'])} cluster runs compared with the simulation -> {args.out}")
+    return 0
+
+
 def cmd_report(args) -> int:
     results.render(args.directory, results.read(args.directory))
     print(f"rendered {Path(args.directory) / 'README.md'} and chart.svg")
@@ -141,6 +149,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--image", default="iab-client:dev")
     p.set_defaults(func=cmd_cluster_run)
+
+    p = sub.add_parser("compare", help="set a directory of cluster runs beside the simulation on the same seeds and settings")
+    p.add_argument("cluster", help="directory of cluster-run result files")
+    p.add_argument("--workload", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--title")
+    p.set_defaults(func=cmd_compare)
 
     p = sub.add_parser("report", help="render README.md and chart.svg again from a dataset's runs.json")
     p.add_argument("directory")
