@@ -184,15 +184,17 @@ subjects:
     name: prometheus-adapter
     namespace: monitoring
 ---
-# What the Horizontal Pod Autoscaler may read from the custom metrics API.
+# What the Horizontal Pod Autoscaler may read from the custom metrics API: the three signals, for pods, read-only. The
+# upstream manifest grants every verb on every resource; a request for /pods/*/concurrency is authorized as the
+# resource `pods` with the subresource `concurrency`, so that is what is granted.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: custom-metrics-server-resources
 rules:
   - apiGroups: [custom.metrics.k8s.io]
-    resources: ["*"]
-    verbs: ["*"]
+    resources: [pods/concurrency, pods/queue, pods/utilization]
+    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

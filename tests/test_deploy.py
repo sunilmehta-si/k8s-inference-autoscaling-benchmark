@@ -121,6 +121,12 @@ class ManifestTests(unittest.TestCase):
             metric = re.search(r"metric: \{name: (\w+)\}", path.read_text()).group(1)
             self.assertIn(metric, recorded)
 
+    def test_no_role_grants_a_wildcard(self):
+        text = (DEPLOY / "monitoring.yaml").read_text()
+        self.assertNotRegex(text, r"(verbs|resources|apiGroups):\s*\[?\s*[\"']?\*")
+        for signal in ("concurrency", "queue", "utilization"):
+            self.assertIn(f"pods/{signal}", text)
+
     def test_the_slots_in_the_utilization_rule_are_the_simulators_slots(self):
         self.assertIn("vllm:num_requests_running / 8", (DEPLOY / "monitoring.yaml").read_text())
         self.assertIn("max-num-seqs: 8", (DEPLOY / "servers.yaml").read_text())
