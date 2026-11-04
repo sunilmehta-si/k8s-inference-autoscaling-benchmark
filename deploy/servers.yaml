@@ -1,0 +1,92 @@
+# The model servers: REPLICAS simulated vLLM pods behind one Service. The placeholders in braces come from deploy/versions.env and
+# scripts/deploy-servers.sh.
+#
+# The simulator stands in for a vLLM server with the same shape the simulation models: eight concurrent requests per
+# pod, prefill at 4,000 tokens per second (0.25 ms a token), 20 ms a token to decode, and everything slowing as a pod
+# fills. Its one load factor is 1.55, the mean of the simulation's two (1.5 for prefill, 1.6 for decode). The
+# simulation's central queue does not exist here: each pod queues its own requests and kube-proxy spreads connections
+# over the pods, which is one of the differences the cluster results measure.
+#
+# A pod is not ready until STARTUP_S seconds after it starts, which stands in for scheduling, pulling an image and loading
+# a model: the simulator itself starts at once. Prometheus scrapes unready pods too, as it would a real one.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: iab
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sim-config
+  namespace: iab
+data:
+  config.yaml: |
+    engine: vllm
+    port: 8000
+    mode: random
+    max-num-seqs: 8
+    max-model-len: 8192
+    latency-calculator: per-token
+    prefill-overhead: 0ms
+    prefill-time-per-token: 250us
+    prefill-time-std-dev: 2ms
+    inter-token-latency: 20ms
+    inter-token-latency-std-dev: 2ms
+    time-factor-under-load: 1.55
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sim
+  namespace: iab
+spec:
+  replicas: ${REPLICAS}
+  selector:
+    matchLabels: {app: sim}
+  template:
+    metadata:
+      labels: {app: sim}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: sim
+          image: ${SIM_IMAGE}
+          args: ["--config", "/etc/sim/config.yaml", "--model", "sim-model"]
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+          ports: [{name: http, containerPort: 8000}]
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            initialDelaySeconds: ${STARTUP_S}
+            periodSeconds: 2
+          # A simulated pod does little work. A small request lets 32 of them, Prometheus and the adapter fit beside
+          # kube-system on a 4-CPU runner.
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 512Mi}
+          volumeMounts: [{name: config, mountPath: /etc/sim, readOnly: true}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: config
+          configMap: {name: sim-config}
+---
+# A plain Service: kube-proxy balances per connection without looking at the request or at the pods' load.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sim
+  namespace: iab
+spec:
+  selector: {app: sim}
+  ports: [{name: http, port: 8000, targetPort: 8000}]

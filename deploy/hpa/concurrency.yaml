@@ -1,0 +1,18 @@
+# The Horizontal Pod Autoscaler on requests in the system per pod, target 6, with every default but the scale-down
+# window: the same policy as `hpa-concurrency` in the simulation. The placeholders in braces come from scripts/apply-hpa.sh.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sim
+  namespace: iab
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: sim}
+  minReplicas: ${MIN_REPLICAS}
+  maxReplicas: ${MAX_REPLICAS}
+  metrics:
+    - type: Pods
+      pods:
+        metric: {name: concurrency}
+        target: {type: AverageValue, averageValue: "6"}
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}
