@@ -74,6 +74,16 @@ class ScalingTests(unittest.TestCase):
         r = run([(1.0, 400, 10)], Scripted(1, {0.0: 5}))
         self.assertEqual(r.events, [])
 
+    def test_a_shorter_sync_period_lets_the_autoscaler_act_sooner(self):
+        # Asked at t=5 for a second pod that starts in 10 s, a request at t=20 finds it ready; at a 15 s period it would
+        # be asked at t=15 and ready at 25.
+        rows = [(1.0, 400, 2000), (20.0, 400, 10)]
+        fast = sim.simulate(trace(*rows), tiny_workload(60), Scripted(1, {5.0: 2}), sim.Replica(slots=1, startup_s=10), ONE, 5.0)
+        slow = sim.simulate(trace(*rows), tiny_workload(60), Scripted(1, {15.0: 2}), sim.Replica(slots=1, startup_s=10), ONE, 15.0)
+        self.assertAlmostEqual(fast.wait[1], 0.0)
+        self.assertAlmostEqual(slow.wait[1], 5.0)
+        self.assertEqual([row[0] for row in fast.timeline][:4], [0.0, 5.0, 10.0, 15.0])
+
     def test_the_timeline_has_one_row_per_sync_period(self):
         r = run([(1.0, 400, 10)], Static(1), duration=60)
         self.assertEqual([row[0] for row in r.timeline], [0.0, 15.0, 30.0, 45.0, 60.0])

@@ -76,12 +76,12 @@ def markdown(doc: dict) -> str:
         f"Each cell is the median of {len(seeds)} runs, with the lowest and highest in brackets. Every policy replays the "
         "same seeded trace in each run; the seeds differ between runs.",
         "",
-        "| Policy | Spec | Fewest pods | Pod startup |",
-        "|---|---|---|---|",
+        "| Policy | Spec | Fewest pods | Pod startup | Decides every |",
+        "|---|---|---|---|---|",
     ]
     for p in doc["policies"]:
         minimum = p.get("min_replicas", doc["bounds"]["min_replicas"])
-        lines.append(f"| `{p['label']}` | `{p['text']}` | {minimum} | {p['startup_s']:g} s |")
+        lines.append(f"| `{p['label']}` | `{p['text']}` | {minimum} | {p['startup_s']:g} s | {p.get('sync_s', 15.0):g} s |")
     lines += ["", "| Metric | " + " | ".join(f"`{label}`" for label in labels) + " |", "|---|" + "---|" * len(labels)]
     for key, name, fmt, direction in METRICS:
         medians = {label: statistics.median(table[label][s][key] for s in seeds) for label in labels}

@@ -49,7 +49,7 @@ class MarkdownTests(unittest.TestCase):
         self.assertIn("## A test", self.text)
         self.assertIn("2 s", self.text)
         self.assertIn("Each cell is the median of 3 runs", self.text)
-        self.assertIn("| `a` | `a` | 2 | 45 s |", self.text)
+        self.assertIn("| `a` | `a` | 2 | 45 s | 15 s |", self.text)
         self.assertIn("may grow to 8 pods", self.text)
 
     def test_cells_show_the_median_and_the_range_and_the_best_is_bold(self):

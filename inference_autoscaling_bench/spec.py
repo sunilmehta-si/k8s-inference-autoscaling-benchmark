@@ -6,7 +6,8 @@
     slow=hpa-rps:startup=120           a label, and pods that take 120 s to start
 
 Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA; startup
-(seconds before a new pod is ready) and min (the fewest pods, the standing headroom) for any policy.
+(seconds before a new pod is ready), min (the fewest pods, the standing headroom) and sync (seconds between the
+autoscaler's decisions) for any policy.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Callable
 
 from .policies import SIGNALS, Hpa, Policy, Static
-from .sim import Replica
+from .sim import SYNC_PERIOD_S, Replica
 
 HPA_KEYS = {"target": float, "down": float, "up_window": float, "tolerance": float, "up_pods": int, "up_percent": float}
 HPA_ARGUMENT = {"down": "down_window_s", "up_window": "up_window_s"}
@@ -27,6 +28,7 @@ class Spec:
     make: Callable[[], Policy]   # a fresh policy: an HPA remembers its recommendations
     replica: Replica
     min_replicas: int | None = None   # overrides the matrix's minimum for this policy
+    sync_s: float = SYNC_PERIOD_S
 
 
 def parse(text: str, base: Replica = Replica()) -> Spec:
@@ -44,25 +46,30 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
         minimum = _number(int, "min", params.pop("min"))
         if minimum < 1:
             raise ValueError("min must be at least 1")
+    sync = SYNC_PERIOD_S
+    if "sync" in params:
+        sync = _number(float, "sync", params.pop("sync"))
+        if sync <= 0:
+            raise ValueError("sync must be positive")
     if "startup" in params:
         replica = replace(base, startup_s=_number(float, "startup", params.pop("startup")))
     label = label or (body if options else kind)
     if kind.startswith("static-"):
         if params:
-            raise ValueError(f"a static pool takes no options besides startup and min, not {', '.join(params)}")
+            raise ValueError(f"a static pool takes no options besides startup, min and sync, not {', '.join(params)}")
         size = _number(int, "pool size", kind[len("static-"):])
         if size < 1:
             raise ValueError("a static pool needs at least one pod")
-        return Spec(label, text, lambda: Static(size), replica, minimum)
+        return Spec(label, text, lambda: Static(size), replica, minimum, sync)
     signal = kind[len("hpa-"):] if kind.startswith("hpa-") else ""
     if signal not in SIGNALS:
         raise ValueError(f"unknown policy {kind!r}: use static-N or hpa-<{'|'.join(SIGNALS)}>")
     arguments = {}
     for key, value in params.items():
         if key not in HPA_KEYS:
-            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min")
+            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min, sync")
         arguments[HPA_ARGUMENT.get(key, key)] = _number(HPA_KEYS[key], key, value)
-    return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica, minimum)
+    return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica, minimum, sync)
 
 
 def _number(kind, what, value):

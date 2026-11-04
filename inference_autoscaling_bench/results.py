@@ -25,7 +25,7 @@ def build(title: str, workload: Workload, bounds: Bounds, specs: list[Spec], row
         "title": title,
         "workload": {"name": workload.name, "duration_s": workload.duration_s, "slo_ttft_s": workload.slo_ttft_s},
         "bounds": {"min_replicas": bounds.min_replicas, "max_replicas": bounds.max_replicas},
-        "policies": [{"label": s.label, "text": s.text, "startup_s": s.replica.startup_s,
+        "policies": [{"label": s.label, "text": s.text, "startup_s": s.replica.startup_s, "sync_s": s.sync_s,
                       "min_replicas": bounds.min_replicas if s.min_replicas is None else s.min_replicas} for s in specs],
         "runs": rows,
         "demand": demand_series(first_trace, workload.duration_s),

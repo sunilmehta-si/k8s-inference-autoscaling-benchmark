@@ -30,6 +30,12 @@ class ParseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 1"):
             spec.parse("hpa-concurrency:min=0")
 
+    def test_the_decision_period_can_be_set_per_policy(self):
+        self.assertEqual(spec.parse("hpa-queue").sync_s, 15.0)
+        self.assertEqual(spec.parse("hpa-queue:sync=5").sync_s, 5.0)
+        with self.assertRaisesRegex(ValueError, "positive"):
+            spec.parse("hpa-queue:sync=0")
+
     def test_a_label_names_the_policy_in_results(self):
         s = spec.parse("slow=hpa-rps:startup=120")
         self.assertEqual((s.label, s.make().name, s.replica.startup_s), ("slow", "slow", 120.0))

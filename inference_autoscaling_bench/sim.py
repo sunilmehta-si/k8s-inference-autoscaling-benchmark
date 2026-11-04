@@ -9,7 +9,8 @@ What is modelled, and where it is a simplification (docs/methodology.md says why
 * A new pod is not ready until `startup_s` has passed (scheduling, image, model load), and costs from creation.
 * Scaling down removes pods still starting first, then the ready pods holding the fewest requests. A removed pod
   takes no new requests, finishes the ones it has, and stops costing when it is empty. Nothing is dropped.
-* The autoscaler runs every `SYNC_PERIOD_S` seconds, the HPA default, and sees only what a metrics pipeline would.
+* The autoscaler runs every `sync_period_s` seconds (15, the HPA default, unless a spec says otherwise) and sees the
+  exact state at that instant. The scale-up limit applies per sync, which equals per 15 s only at the default period.
 """
 from __future__ import annotations
 
@@ -66,7 +67,7 @@ class Run:
 
 
 def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: Replica = Replica(),
-             bounds: Bounds = Bounds()) -> Run:
+             bounds: Bounds = Bounds(), sync_period_s: float = SYNC_PERIOD_S) -> Run:
     n = len(trace)
     duration = workload.duration_s
     wait, ttft, latency = [0.0] * n, [0.0] * n, [0.0] * n
@@ -120,10 +121,10 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
         add_pod(0.0, 0.0, "ready")
     for req in trace:
         push(req.arrival, _ARRIVAL, req.index)
-    tick = SYNC_PERIOD_S
+    tick = sync_period_s
     while tick <= duration:
         push(tick, _TICK, None)
-        tick += SYNC_PERIOD_S
+        tick += sync_period_s
     push(0.0, _TICK, None)
 
     while heap:
