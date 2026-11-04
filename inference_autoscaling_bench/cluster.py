@@ -6,6 +6,7 @@ points at a real cluster cannot be touched by mistake. The unit tests use a fake
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -223,6 +224,10 @@ def run_on_cluster(spec, workload: Workload, seed: int, workload_path: Path, ima
     summary.update({"policy": spec.label, "seed": seed, "source": "cluster"})
     return {
         "summary": summary,
+        # what the scripts were told, so the simulation can be set up the same way
+        "config": {"startup_s": float(os.environ.get("STARTUP_S", 45)), "min_replicas": int(os.environ.get("MIN_REPLICAS", 2)),
+                   "max_replicas": int(os.environ.get("MAX_REPLICAS", 32)), "down_window_s": float(os.environ.get("DOWN_WINDOW_S", 300)),
+                   "workload": workload.name},
         "client": {
             "requests": len(results), "answered": len(answered), "failed": len(results) - len(answered),
             "lateness_p95_s": sorted(r.lateness_s for r in results)[int(len(results) * 0.95)] if results else 0.0,
