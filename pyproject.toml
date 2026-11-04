@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "k8s-inference-autoscaling-benchmark"
+dynamic = ["version"]
+description = "Compare Kubernetes autoscaling signals (utilization, concurrency, queue depth, request rate) for LLM inference on identical bursty traces, with the HPA algorithm modelled exactly. No GPUs needed."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Sunil Mehta" }]
+keywords = ["kubernetes", "llm", "inference", "autoscaling", "hpa", "keda", "vllm", "benchmark", "mlops"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Distributed Computing",
+  "Topic :: System :: Benchmark",
+  "Environment :: Console",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/sunilmehta-si/k8s-inference-autoscaling-benchmark"
+
+[project.scripts]
+iab = "inference_autoscaling_bench.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "inference_autoscaling_bench.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["inference_autoscaling_bench*"]

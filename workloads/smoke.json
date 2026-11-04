@@ -1,0 +1,9 @@
+{
+  "name": "smoke",
+  "description": "A short, small workload for tests and a first look.",
+  "duration_s": 60,
+  "schedule": [[0, 2], [20, 2], [30, 10], [40, 2], [60, 2]],
+  "prompt_tokens": {"median": 300, "sigma": 0.5, "max": 2000},
+  "output_tokens": {"median": 60, "sigma": 0.5, "max": 300},
+  "slo_ttft_s": 2.0
+}
