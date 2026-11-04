@@ -1,0 +1,55 @@
+name: cluster
+
+# Brings up a kind cluster with the model servers, Prometheus and prometheus-adapter, and checks that a real Horizontal
+# Pod Autoscaler can read the signal end to end. Only the deploy files and scripts can break it, so only they trigger it.
+on:
+  pull_request:
+    paths: ["deploy/**", "scripts/**", ".github/workflows/cluster.yml"]
+  push:
+    branches: [main]
+    paths: ["deploy/**", "scripts/**", ".github/workflows/cluster.yml"]
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cluster-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+# The runner is pinned like kind and the images: ubuntu-latest moved to Ubuntu 26.04 on 2026-10-29 and broke a sibling
+# project's cluster runs. A runner bump is a pull request of its own, with a cluster run to show for it.
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install kind
+        run: |
+          . deploy/versions.env
+          curl -sSfL -o "$RUNNER_TEMP/kind" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256_LINUX_AMD64}  $RUNNER_TEMP/kind" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/kind"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Cluster
+        run: scripts/cluster-up.sh
+      - name: Model servers
+        env:
+          STARTUP_S: "20"
+        run: scripts/deploy-servers.sh 2
+      - name: Monitoring
+        run: scripts/deploy-monitoring.sh
+      - name: The metrics path, end to end
+        run: scripts/smoke.sh
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40 || true
