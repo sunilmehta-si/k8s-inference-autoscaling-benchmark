@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- `route=pod` for any policy spec: each request goes to a random ready pod when it arrives and waits in that pod's own
+  queue, as behind a Kubernetes Service, instead of in one shared queue. Run against the cluster's twelve runs, it moves
+  every policy toward them (the p95 first token of `hpa-concurrency` goes from 45 s to 85 s against 121 s on the cluster,
+  and `static-24` from 642 ms to 914 ms against 1,038 ms), so most of the tail gap is the queueing, not the autoscaler.
 - `results/cluster`: twelve 30-minute runs on a kind cluster (the `burst` workload, four policies, three seeds), each
   beside the simulation on the same seed. Medians and the scaling decisions of `hpa-concurrency` and `hpa-queue` agree;
   the 95th-percentile first token is higher on the cluster in all 12 runs; `hpa-utilization` does much worse on the
