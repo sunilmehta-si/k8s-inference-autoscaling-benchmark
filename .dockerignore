@@ -1,0 +1,7 @@
+.git
+.github
+results
+tests
+docs
+__pycache__
+*.egg-info

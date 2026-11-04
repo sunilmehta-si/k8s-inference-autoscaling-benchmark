@@ -6,7 +6,10 @@ import statistics
 import sys
 from pathlib import Path
 
-from . import __version__, experiment, report, results, workload as workloads
+import json
+import time
+
+from . import __version__, client as load_client, cluster, experiment, report, results, workload as workloads
 from .metrics import summarize
 from .policies import SIGNALS, Bounds
 from .sim import simulate
@@ -63,6 +66,30 @@ def cmd_matrix(args) -> int:
     return 0
 
 
+def cmd_client(args) -> int:
+    """Runs inside the cluster as a Job: prints one JSON document with every request's result as its last line."""
+    w = workloads.load(args.workload)
+    trace = workloads.generate(w, args.seed)
+    print(f"replaying {len(trace):,} requests of {w.name} (seed {args.seed}) against {args.url}", file=sys.stderr, flush=True)
+    start_epoch = time.time() + 1.0
+    outcome = load_client.run(args.url, args.model, trace, timeout=args.timeout)
+    failed = sum(1 for r in outcome if not r.ok)
+    print(f"done: {len(outcome) - failed:,} answered, {failed:,} failed", file=sys.stderr, flush=True)
+    print(json.dumps({"start_epoch": start_epoch, "results": [r.to_dict() for r in outcome]}, separators=(",", ":")))
+    return 0
+
+
+def cmd_cluster_run(args) -> int:
+    spec = _specs([args.policy])[0]
+    w = workloads.load(args.workload)
+    document = cluster.run_on_cluster(spec, w, args.seed, Path(args.workload), image=args.image)
+    cluster.write(args.out, document)
+    row = document["summary"]
+    print(f"{spec.label} seed {args.seed}: goodput {row['goodput'] * 100:.1f}%, ttft p95 {row['ttft_p95_ms']:,.0f} ms, "
+          f"{row['replica_seconds']:,.0f} replica-seconds, peak {row['peak_replicas']} pods -> {args.out}")
+    return 0
+
+
 def cmd_report(args) -> int:
     results.render(args.directory, results.read(args.directory))
     print(f"rendered {Path(args.directory) / 'README.md'} and chart.svg")
@@ -98,6 +125,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--title")
     p.set_defaults(func=cmd_matrix)
+
+    p = sub.add_parser("client", help="replay a workload's trace against an endpoint (runs inside the cluster)")
+    p.add_argument("--workload", required=True)
+    p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--url", default="http://sim.iab.svc:8000")
+    p.add_argument("--model", default="sim-model")
+    p.add_argument("--timeout", type=float, default=600.0)
+    p.set_defaults(func=cmd_client)
+
+    p = sub.add_parser("cluster-run", help="one policy and seed on the kind cluster (CI only: needs the kind-iab context)")
+    p.add_argument("--policy", required=True, metavar="SPEC")
+    p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--workload", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--image", default="iab-client:dev")
+    p.set_defaults(func=cmd_cluster_run)
 
     p = sub.add_parser("report", help="render README.md and chart.svg again from a dataset's runs.json")
     p.add_argument("directory")

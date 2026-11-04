@@ -1,0 +1,37 @@
+# The load client: replays the workload's trace, open loop, against the model servers from inside the cluster, so
+# kube-proxy balances its connections the way it would a real client's. The placeholders in braces are filled by
+# inference_autoscaling_bench/cluster.py. The workload comes from the ConfigMap `workload`, written from the same file
+# the simulation reads.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: client
+  namespace: iab
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: ${DEADLINE_S}
+  template:
+    metadata:
+      labels: {app: client}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: client
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          args: ["client", "--workload", "/etc/workload/workload.json", "--seed", "${SEED}", "--url", "http://sim.iab.svc:8000"]
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {memory: 2Gi}
+          volumeMounts: [{name: workload, mountPath: /etc/workload, readOnly: true}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: workload
+          configMap: {name: workload}
