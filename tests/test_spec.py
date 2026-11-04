@@ -23,6 +23,13 @@ class ParseTests(unittest.TestCase):
         self.assertEqual((policy.target, policy.down_window_s, policy.up_pods), (2.0, 60.0, 8))
         self.assertEqual(s.replica.startup_s, 120.0)
 
+    def test_the_fewest_pods_can_be_set_per_policy(self):
+        self.assertEqual(spec.parse("hpa-concurrency:min=6").min_replicas, 6)
+        self.assertIsNone(spec.parse("hpa-concurrency").min_replicas)
+        self.assertEqual(spec.parse("warm=hpa-queue:min=4,startup=10").min_replicas, 4)
+        with self.assertRaisesRegex(ValueError, "at least 1"):
+            spec.parse("hpa-concurrency:min=0")
+
     def test_a_label_names_the_policy_in_results(self):
         s = spec.parse("slow=hpa-rps:startup=120")
         self.assertEqual((s.label, s.make().name, s.replica.startup_s), ("slow", "slow", 120.0))
@@ -52,6 +59,11 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(rows[0]["requests"], rows[1]["requests"])   # one trace per seed, whatever the policy
         self.assertNotEqual(rows[0]["requests"], rows[2]["requests"])
         self.assertEqual(sorted(kept), ["hpa-queue", "static-2"])
+
+    def test_a_policy_with_its_own_minimum_starts_with_that_many_pods(self):
+        w = tiny_workload()
+        rows, _ = experiment.run_matrix(w, [spec.parse("hpa-queue:min=5"), spec.parse("hpa-queue")], [1])
+        self.assertEqual([r["peak_replicas"] for r in rows], [5, 2])
 
     def test_two_policies_with_one_label_are_refused(self):
         with self.assertRaises(ValueError):

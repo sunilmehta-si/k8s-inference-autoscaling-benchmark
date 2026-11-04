@@ -70,17 +70,18 @@ def markdown(doc: dict) -> str:
         f"## {doc['title']}",
         "",
         f"Workload [{w['name']}](../../workloads/{w['name']}.json): {w['duration_s'] / 60:.0f} minutes, about {requests:,.0f} requests "
-        f"in a run. The objective is a first token within {w['slo_ttft_s']:g} s. Pods start with {doc['bounds']['min_replicas']} "
-        f"replicas and may grow to {doc['bounds']['max_replicas']}.",
+        f"in a run. The objective is a first token within {w['slo_ttft_s']:g} s. A pool may grow to "
+        f"{doc['bounds']['max_replicas']} pods.",
         "",
         f"Each cell is the median of {len(seeds)} runs, with the lowest and highest in brackets. Every policy replays the "
         "same seeded trace in each run; the seeds differ between runs.",
         "",
-        "| Policy | Spec | Pod startup |",
-        "|---|---|---|",
+        "| Policy | Spec | Fewest pods | Pod startup |",
+        "|---|---|---|---|",
     ]
     for p in doc["policies"]:
-        lines.append(f"| `{p['label']}` | `{p['text']}` | {p['startup_s']:g} s |")
+        minimum = p.get("min_replicas", doc["bounds"]["min_replicas"])
+        lines.append(f"| `{p['label']}` | `{p['text']}` | {minimum} | {p['startup_s']:g} s |")
     lines += ["", "| Metric | " + " | ".join(f"`{label}`" for label in labels) + " |", "|---|" + "---|" * len(labels)]
     for key, name, fmt, direction in METRICS:
         medians = {label: statistics.median(table[label][s][key] for s in seeds) for label in labels}

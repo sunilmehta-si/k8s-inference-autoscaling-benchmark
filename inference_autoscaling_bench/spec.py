@@ -6,7 +6,7 @@
     slow=hpa-rps:startup=120           a label, and pods that take 120 s to start
 
 Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA; startup
-(seconds before a new pod is ready) for any policy.
+(seconds before a new pod is ready) and min (the fewest pods, the standing headroom) for any policy.
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ class Spec:
     text: str
     make: Callable[[], Policy]   # a fresh policy: an HPA remembers its recommendations
     replica: Replica
+    min_replicas: int | None = None   # overrides the matrix's minimum for this policy
 
 
 def parse(text: str, base: Replica = Replica()) -> Spec:
@@ -38,25 +39,30 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
             raise ValueError(f"{item!r} in {text!r} is not key=value")
         params[key.strip()] = value.strip()
     replica = base
+    minimum = None
+    if "min" in params:
+        minimum = _number(int, "min", params.pop("min"))
+        if minimum < 1:
+            raise ValueError("min must be at least 1")
     if "startup" in params:
         replica = replace(base, startup_s=_number(float, "startup", params.pop("startup")))
-    label = label or (body if params or "startup" in options else kind)
+    label = label or (body if options else kind)
     if kind.startswith("static-"):
         if params:
-            raise ValueError(f"a static pool takes no options besides startup, not {', '.join(params)}")
+            raise ValueError(f"a static pool takes no options besides startup and min, not {', '.join(params)}")
         size = _number(int, "pool size", kind[len("static-"):])
         if size < 1:
             raise ValueError("a static pool needs at least one pod")
-        return Spec(label, text, lambda: Static(size), replica)
+        return Spec(label, text, lambda: Static(size), replica, minimum)
     signal = kind[len("hpa-"):] if kind.startswith("hpa-") else ""
     if signal not in SIGNALS:
         raise ValueError(f"unknown policy {kind!r}: use static-N or hpa-<{'|'.join(SIGNALS)}>")
     arguments = {}
     for key, value in params.items():
         if key not in HPA_KEYS:
-            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup")
+            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min")
         arguments[HPA_ARGUMENT.get(key, key)] = _number(HPA_KEYS[key], key, value)
-    return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica)
+    return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica, minimum)
 
 
 def _number(kind, what, value):
