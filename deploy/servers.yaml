@@ -3,7 +3,8 @@
 #
 # The simulator stands in for a vLLM server with the same shape the simulation models: eight concurrent requests per
 # pod, prefill at 4,000 tokens per second (0.25 ms a token), 20 ms a token to decode, and everything slowing as a pod
-# fills. Its one load factor is 1.55, the mean of the simulation's two (1.5 for prefill, 1.6 for decode). The
+# fills. Its one load factor is 1.55 at a full pod, close to the simulation's two (about 1.44 for prefill and 1.53 for
+# decode). The
 # simulation's central queue does not exist here: each pod queues its own requests and kube-proxy spreads connections
 # over the pods, which is one of the differences the cluster results measure.
 #

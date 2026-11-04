@@ -95,11 +95,18 @@ pod lifecycle. `policies.py` is the HPA algorithm, step by step, behind four sig
 `chart.py` turn runs into the numbers, tables and chart. Everything is deterministic: the same workload, seed and
 policy give the same run on any machine and Python version, and the committed results are checked by re-running them.
 
+## The cluster stage
+
+[`docs/cluster.md`](docs/cluster.md): the same policies on the same seeded traces on a kind cluster, with the real
+Horizontal Pod Autoscaler, Prometheus and prometheus-adapter in front of simulated vLLM pods, so the model can be checked
+against something that is not the model. `iab compare` sets each cluster run beside the simulation on the same seed and
+settings. It runs in CI only: the scripts refuse any kubectl context but `kind-iab`.
+
 ## Status
 
-Version 0.1.0 is the simulation and its results. Not yet built: real pods on a kind cluster with the Kubernetes
-HorizontalPodAutoscaler and KEDA reading real vLLM metrics, which is the stage that turns these comparisons into
-measurements; a predictive policy; and a workload with a gentler ramp, to find where reactive scaling is enough.
+The simulation, its seven datasets and the cluster stage's runner and comparison are built. The cluster results are
+being collected and are not in this repository yet. Not yet built: KEDA reading the same signals, a predictive policy,
+and a workload with a gentler ramp, to find where reactive scaling is enough.
 
 ## Related projects
 
