@@ -8,7 +8,7 @@ from inference_autoscaling_bench import metrics, report, results, sim, spec, wor
 from inference_autoscaling_bench.policies import Bounds
 
 ROOT = Path(__file__).resolve().parent.parent
-DATASETS = sorted(p.parent.name for p in (ROOT / "results").glob("*/runs.json"))
+DATASETS = sorted(p.parent.name for p in (ROOT / "results").glob("*/runs.json") if p.parent.name != "cluster")   # cluster holds cluster runs
 README = (ROOT / "README.md").read_text()
 FLAT = re.sub(r"\s+", " ", README)   # the prose wraps; the checks below read it as one line
 
@@ -105,3 +105,58 @@ class ReadmeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClusterResultsTests(unittest.TestCase):
+    DOC = results.read(ROOT / "results" / "cluster")
+    CLUSTER_README = (ROOT / "results" / "cluster" / "README.md").read_text()
+
+    @staticmethod
+    def goodput(rows, policy, side):
+        return statistics.median(r[side]["goodput"] for r in rows if r["policy"] == policy)
+
+    def test_there_are_three_seeds_of_each_of_four_policies(self):
+        rows = self.DOC["rows"]
+        self.assertEqual(sorted((r["policy"], r["seed"]) for r in rows),
+                         sorted((p, s) for p in ("hpa-concurrency", "hpa-queue", "hpa-utilization", "static-24") for s in (1, 2, 3)))
+
+    def test_the_cluster_readme_regenerates_from_the_runs(self):
+        from inference_autoscaling_bench import compare
+        self.assertEqual(self.CLUSTER_README, compare.markdown(self.DOC))
+
+    def test_the_tail_is_worse_on_the_cluster_in_every_run(self):
+        for r in self.DOC["rows"]:
+            with self.subTest(policy=r["policy"], seed=r["seed"]):
+                self.assertGreater(r["cluster"]["ttft_p95_ms"], r["simulation"]["ttft_p95_ms"])
+        self.assertIn("in all 12 runs", FLAT)
+
+    def test_medians_are_within_60_ms(self):
+        for policy in ("hpa-concurrency", "hpa-queue", "hpa-utilization", "static-24"):
+            if policy == "hpa-utilization":
+                continue   # its median first token is 7.7 s on the cluster; the README does not claim agreement for it
+            med = lambda side: statistics.median(r[side]["ttft_p50_ms"] for r in self.DOC["rows"] if r["policy"] == policy)
+            with self.subTest(policy=policy):
+                self.assertLess(abs(med("cluster") - med("simulation")), 60)
+
+    def test_the_scaling_decisions_agree_for_concurrency_and_queue(self):
+        for policy in ("hpa-concurrency", "hpa-queue"):
+            for r in (r for r in self.DOC["rows"] if r["policy"] == policy):
+                self.assertEqual(r["cluster"]["peak_replicas"], r["simulation"]["peak_replicas"])
+            med = lambda side: statistics.median(r[side]["scale_ups"] for r in self.DOC["rows"] if r["policy"] == policy)
+            self.assertLessEqual(abs(med("cluster") - med("simulation")), 1)
+
+    def test_the_ranking_of_the_signals_differs(self):
+        rows = self.DOC["rows"]
+        order = lambda side: sorted(("hpa-concurrency", "hpa-queue", "hpa-utilization"), key=lambda p: -self.goodput(rows, p, side))
+        self.assertEqual(order("cluster"), ["hpa-concurrency", "hpa-queue", "hpa-utilization"])
+        self.assertEqual(order("simulation"), ["hpa-concurrency", "hpa-utilization", "hpa-queue"])
+        self.assertIn(f"`hpa-queue` is second ({self.goodput(rows, 'hpa-queue', 'cluster') * 100:.1f}%)", FLAT)
+        self.assertIn(f"`hpa-utilization` last ({self.goodput(rows, 'hpa-utilization', 'cluster') * 100:.1f}%", FLAT)
+
+    def test_static_scaling_misses_the_objective_on_the_cluster_only(self):
+        self.assertIn(f"serves {self.goodput(self.DOC['rows'], 'static-24', 'cluster') * 100:.1f}% within the objective", FLAT)
+        self.assertEqual(self.goodput(self.DOC["rows"], "static-24", "simulation"), 1.0)
+
+    def test_utilization_peaks_below_the_ceiling_on_the_cluster(self):
+        peaks = sorted(r["cluster"]["peak_replicas"] for r in self.DOC["rows"] if r["policy"] == "hpa-utilization")
+        self.assertEqual((peaks[0], peaks[-1]), (26, 28))

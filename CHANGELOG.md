@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `results/cluster`: twelve 30-minute runs on a kind cluster (the `burst` workload, four policies, three seeds), each
+  beside the simulation on the same seed. Medians and the scaling decisions of `hpa-concurrency` and `hpa-queue` agree;
+  the 95th-percentile first token is higher on the cluster in all 12 runs; `hpa-utilization` does much worse on the
+  cluster than in the simulation (40.9% against 72.3%), which is not explained yet.
+
 ## [0.1.0] - 2026-11-04
 
 The first release: a simulation of an LLM inference deployment behind the Kubernetes HorizontalPodAutoscaler, and what
