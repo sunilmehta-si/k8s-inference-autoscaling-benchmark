@@ -72,8 +72,8 @@ class TraceTests(unittest.TestCase):
         counts = [len(workload.generate(self.burst, s)) for s in range(1, 9)]
         self.assertAlmostEqual(statistics.mean(counts), self.burst.expected_requests, delta=self.burst.expected_requests * 0.03)
         trace = workload.generate(self.burst, 1)
-        quiet = sum(1 for r in trace if 330 <= r.arrival < 410) / 80
-        spike = sum(1 for r in trace if 428 <= r.arrival < 444) / 16
+        quiet = sum(1 for r in trace if 700 <= r.arrival < 1100) / 400
+        spike = sum(1 for r in trace if 1208 <= r.arrival < 1222) / 14
         self.assertGreater(spike, quiet * 8)
 
 
