@@ -1,0 +1,18 @@
+# The Horizontal Pod Autoscaler on requests waiting per pod, target 1: the same policy as `hpa-queue` in the simulation.
+# The placeholders in braces come from scripts/apply-hpa.sh.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sim
+  namespace: iab
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: sim}
+  minReplicas: ${MIN_REPLICAS}
+  maxReplicas: ${MAX_REPLICAS}
+  metrics:
+    - type: Pods
+      pods:
+        metric: {name: queue}
+        target: {type: AverageValue, averageValue: "1"}
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}

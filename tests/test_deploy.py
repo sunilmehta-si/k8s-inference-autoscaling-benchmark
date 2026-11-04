@@ -25,7 +25,7 @@ def versions() -> dict:
 class PinTests(unittest.TestCase):
     def test_every_image_is_pinned_by_digest(self):
         v = versions()
-        for key in ("KIND_NODE_IMAGE", "SIM_IMAGE", "PROMETHEUS_IMAGE", "PROMETHEUS_ADAPTER_IMAGE"):
+        for key in ("KIND_NODE_IMAGE", "SIM_IMAGE", "PROMETHEUS_IMAGE", "PROMETHEUS_ADAPTER_IMAGE", "PYTHON_IMAGE"):
             with self.subTest(image=key):
                 self.assertRegex(v[key], r"@sha256:[0-9a-f]{64}$")
 
@@ -36,6 +36,13 @@ class PinTests(unittest.TestCase):
 
     def test_the_downloaded_binary_has_a_checksum(self):
         self.assertRegex(versions()["KIND_SHA256_LINUX_AMD64"], r"^[0-9a-f]{64}$")
+
+    def test_the_dockerfile_takes_its_base_from_the_pin(self):
+        text = (ROOT / "Dockerfile").read_text()
+        self.assertIn("ARG PYTHON_IMAGE", text)
+        self.assertIn("FROM ${PYTHON_IMAGE}", text)
+        self.assertIn("--build-arg \"PYTHON_IMAGE=${PYTHON_IMAGE}\"", (SCRIPTS / "build-client.sh").read_text())
+        self.assertIn("USER 10001", text)
 
     def test_no_manifest_names_an_image_directly(self):
         for path in DEPLOY.rglob("*.yaml"):
@@ -52,6 +59,9 @@ class PinTests(unittest.TestCase):
             listed = set(re.findall(r"\$\{([A-Z_]+)\}", re.search(r"envsubst '([^']*)'", (SCRIPTS / script).read_text()).group(1)))
             with self.subTest(manifest=manifest):
                 self.assertEqual(used, listed)
+        job = set(re.findall(r"\$\{([A-Z_]+)\}", (DEPLOY / "client.yaml").read_text()))
+        filled = set(re.findall(r'replace\("\$\{([A-Z_]+)\}"', (ROOT / "inference_autoscaling_bench/cluster.py").read_text()))
+        self.assertEqual(job, filled)
         hpa = set()
         for path in (DEPLOY / "hpa").glob("*.yaml"):
             hpa |= set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", path.read_text()))
@@ -103,6 +113,11 @@ class ManifestTests(unittest.TestCase):
     def test_namespaces_enforce_the_restricted_pod_security_standard(self):
         for name in ("servers.yaml", "monitoring.yaml"):
             self.assertIn("pod-security.kubernetes.io/enforce: restricted", (DEPLOY / name).read_text())
+        # the load client runs in the iab namespace, so it must meet the same standard
+        client = (DEPLOY / "client.yaml").read_text()
+        for setting in ("runAsNonRoot: true", "allowPrivilegeEscalation: false", 'capabilities: {drop: ["ALL"]}',
+                        "readOnlyRootFilesystem: true", "RuntimeDefault"):
+            self.assertIn(setting, client)
 
     def test_every_container_drops_all_capabilities_and_blocks_escalation(self):
         for name in ("servers.yaml", "monitoring.yaml"):
@@ -131,11 +146,31 @@ class ManifestTests(unittest.TestCase):
         self.assertIn("vllm:num_requests_running / 8", (DEPLOY / "monitoring.yaml").read_text())
         self.assertIn("max-num-seqs: 8", (DEPLOY / "servers.yaml").read_text())
 
-    def test_the_cluster_workflow_pins_its_actions_and_runner(self):
-        text = (ROOT / ".github/workflows/cluster.yml").read_text()
-        runners = re.findall(r"^\s+runs-on:\s*(\S+)", text, re.M)
-        self.assertTrue(runners)
-        self.assertEqual(set(runners), {"ubuntu-24.04"})
+    def test_the_cluster_workflows_pin_their_runner(self):
+        for name in ("cluster.yml", "cluster-run.yml"):
+            text = (ROOT / ".github/workflows" / name).read_text()
+            runners = re.findall(r"^\s+runs-on:\s*(\S+)", text, re.M)
+            with self.subTest(workflow=name):
+                self.assertTrue(runners)
+                self.assertEqual(set(runners), {"ubuntu-24.04"})
+
+    def test_every_signal_has_an_autoscaler_and_a_recorded_series(self):
+        monitoring = (DEPLOY / "monitoring.yaml").read_text()
+        for signal in ("concurrency", "queue", "utilization"):
+            with self.subTest(signal=signal):
+                self.assertTrue((DEPLOY / "hpa" / f"{signal}.yaml").exists())
+                self.assertIn(f"record: iab_{signal}", monitoring)
+
+    def test_the_autoscaler_targets_are_the_simulations_defaults(self):
+        from inference_autoscaling_bench.policies import SIGNALS
+        expected = {"concurrency": "6", "queue": "1", "utilization": "600m"}
+        for signal, (_, target) in SIGNALS.items():
+            if signal in expected:
+                text = (DEPLOY / "hpa" / f"{signal}.yaml").read_text()
+                value = re.search(r'averageValue: "?([\w.]+)"?', text).group(1)
+                with self.subTest(signal=signal):
+                    self.assertEqual(value, expected[signal])
+                    self.assertEqual(float(target), 0.6 if signal == "utilization" else float(expected[signal]))
 
 
 if __name__ == "__main__":

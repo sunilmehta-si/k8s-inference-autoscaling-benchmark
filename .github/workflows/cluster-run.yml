@@ -1,0 +1,83 @@
+name: cluster-run
+
+# Replays a workload through a policy on a real kind cluster, one cluster per policy and seed so none inherits another's
+# state, and uploads each run's result. A full run is half an hour a job, so those are dispatched by hand.
+on:
+  # A pull request that touches the runner replays the one-minute smoke workload through one policy, so the runner is
+  # proven by the change that breaks it. A dispatch chooses everything.
+  pull_request:
+    paths: ["inference_autoscaling_bench/**", "deploy/**", "scripts/**", "Dockerfile", ".github/workflows/cluster-run.yml"]
+  workflow_dispatch:
+    inputs:
+      workload:
+        description: Workload in workloads/ (smoke is a one-minute check; burst is the thirty-minute trace)
+        default: smoke
+      policies:
+        description: Policies to run (JSON list of static-N or hpa-concurrency, hpa-queue, hpa-utilization)
+        default: '["hpa-concurrency"]'
+      seeds:
+        description: Seeds, one run each (JSON list)
+        default: "[1]"
+      startup_s:
+        description: Seconds before a new pod is ready
+        default: "45"
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cluster-run-${{ github.ref }}
+  cancel-in-progress: false
+
+# The runner is pinned like kind and the images: a runner bump is a pull request of its own, with a cluster run to show.
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: ${{ fromJSON(inputs.policies || '["hpa-concurrency"]') }}
+        seed: ${{ fromJSON(inputs.seeds || '[1]') }}
+    env:
+      POLICY: ${{ matrix.policy }}
+      SEED: ${{ matrix.seed }}
+      WORKLOAD: ${{ inputs.workload || 'smoke' }}
+      STARTUP_S: ${{ inputs.startup_s || '20' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Install kind
+        run: |
+          . deploy/versions.env
+          curl -sSfL -o "$RUNNER_TEMP/kind" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256_LINUX_AMD64}  $RUNNER_TEMP/kind" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/kind"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Cluster and the load client image
+        run: |
+          scripts/cluster-up.sh
+          scripts/build-client.sh
+      - name: Run
+        run: scripts/run.sh "$POLICY" "$SEED" "workloads/${WORKLOAD}.json" "out/${POLICY}-seed${SEED}.json"
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get hpa -A || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40 || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: run-${{ matrix.policy }}-seed${{ matrix.seed }}
+          path: out/
+          if-no-files-found: warn

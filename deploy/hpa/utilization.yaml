@@ -1,0 +1,18 @@
+# The Horizontal Pod Autoscaler on busy slots over slots per pod, target 0.6 (600m): the same policy as
+# `hpa-utilization` in the simulation. The placeholders in braces come from scripts/apply-hpa.sh.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sim
+  namespace: iab
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: sim}
+  minReplicas: ${MIN_REPLICAS}
+  maxReplicas: ${MAX_REPLICAS}
+  metrics:
+    - type: Pods
+      pods:
+        metric: {name: utilization}
+        target: {type: AverageValue, averageValue: 600m}
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}
