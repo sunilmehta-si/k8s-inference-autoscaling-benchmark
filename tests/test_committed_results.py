@@ -20,7 +20,7 @@ def median(dataset: str, policy: str, key: str) -> float:
 
 class DatasetTests(unittest.TestCase):
     def test_every_dataset_the_makefile_builds_is_committed_and_the_reverse(self):
-        built = re.findall(r"--out results/([\w-]+)", (ROOT / "Makefile").read_text())
+        built = re.findall(r"--out \$\(1\)/([\w-]+)", (ROOT / "Makefile").read_text())
         self.assertEqual(sorted(built), DATASETS)
         self.assertEqual(len(DATASETS), 7)
 
@@ -223,3 +223,84 @@ class PodQueueClaimTests(unittest.TestCase):
 
 def Policy_bounds():
     return Bounds(2, 32)
+
+
+class PodQueueDatasetTests(unittest.TestCase):
+    """results/pod-queues is the seven datasets again with a queue per pod; its README quotes them against the originals."""
+    README = re.sub(r"\s+", " ", (ROOT / "results" / "pod-queues" / "README.md").read_text())
+
+    def test_it_has_the_same_seven_datasets_with_the_same_policies_and_seeds(self):
+        self.assertEqual(sorted(p.parent.name for p in (ROOT / "results" / "pod-queues").glob("*/runs.json")), DATASETS)
+        for name in DATASETS:
+            with self.subTest(dataset=name):
+                a = results.read(ROOT / "results" / name)
+                b = results.read(ROOT / "results" / "pod-queues" / name)
+                self.assertEqual([p["label"] for p in a["policies"]], [p["label"] for p in b["policies"]])
+                self.assertEqual(sorted((r["policy"], r["seed"]) for r in a["runs"]), sorted((r["policy"], r["seed"]) for r in b["runs"]))
+                self.assertTrue(all(p["text"].endswith("route=pod") for p in b["policies"]))
+
+    def test_its_readme_and_chart_regenerate_exactly(self):
+        from inference_autoscaling_bench import chart
+        for name in DATASETS:
+            with self.subTest(dataset=name):
+                d = ROOT / "results" / "pod-queues" / name
+                doc = results.read(d)
+                self.assertEqual((d / "README.md").read_text(), report.markdown(doc))
+                self.assertEqual((d / "chart.svg").read_text(), chart.svg(doc))
+
+    def test_the_first_run_of_every_policy_is_reproduced_with_a_queue_per_pod(self):
+        for name in DATASETS:
+            doc = results.read(ROOT / "results" / "pod-queues" / name)
+            w = workload.load(ROOT / "workloads" / f"{doc['workload']['name']}.json")
+            trace = workload.generate(w, 1)
+            for policy in doc["policies"]:
+                with self.subTest(dataset=name, policy=policy["label"]):
+                    s = spec.parse(policy["text"])
+                    self.assertTrue(s.pod_queues)
+                    bounds = Bounds(policy["min_replicas"], doc["bounds"]["max_replicas"])
+                    got = metrics.summarize(sim.simulate(trace, w, s.make(), s.replica, bounds, s.sync_s, True, 1), w)
+                    saved = next(r for r in doc["runs"] if r["policy"] == policy["label"] and r["seed"] == 1)
+                    for key, value in got.items():
+                        self.assertAlmostEqual(saved[key], value, delta=abs(value) * 1e-9 + 1e-9, msg=key)
+
+    def test_every_row_of_the_readme_table_is_the_saved_median_of_both_datasets(self):
+        row = re.compile(r"\| [^|]+ \| `([^`]+)` \| ([\d.]+)% \| ([\d.]+)% \| ([\d,]+) \| ([\d,]+) \|")
+        rows = row.findall((ROOT / "results" / "pod-queues" / "README.md").read_text())
+        self.assertEqual(len(rows), 10)
+        home = {"static-24": "signals", "hpa-concurrency": "signals", "hpa-utilization": "signals", "hpa-queue": "signals", "hpa-rps": "signals",
+                "startup-10s": "startup", "limit-none": "scale-up-limit", "min-12": "warm-pool", "conc-down-30": "down-window", "instant": "sync-period"}
+        for policy, g1, g2, c1, c2 in rows:
+            with self.subTest(policy=policy):
+                one, pod = home[policy], f"pod-queues/{home[policy]}"
+                self.assertEqual(g1, f"{median(one, policy, 'goodput') * 100:.1f}")
+                self.assertEqual(g2, f"{median(pod, policy, 'goodput') * 100:.1f}")
+                self.assertEqual(c1, f"{median(one, policy, 'replica_seconds'):,.0f}")
+                self.assertEqual(c2, f"{median(pod, policy, 'replica_seconds'):,.0f}")
+
+    def test_the_claims_in_the_prose(self):
+        def gain(dataset, a, b):
+            return (median(dataset, a, "goodput") - median(dataset, b, "goodput")) * 100
+        self.assertIn(f"buy {gain('startup', 'startup-10s', 'startup-45s'):.1f} points of goodput with one queue and {gain('pod-queues/startup', 'startup-10s', 'startup-45s'):.1f} with a queue per pod", self.README)
+        self.assertIn(f"buys {gain('scale-up-limit', 'limit-none', 'limit-default'):.1f} and {gain('pod-queues/scale-up-limit', 'limit-none', 'limit-default'):.1f}", self.README)
+        self.assertIn(f"costs {median('pod-queues/signals', 'hpa-concurrency', 'replica_seconds') / 43200:.0%} of the static pool, not {median('signals', 'hpa-concurrency', 'replica_seconds') / 43200:.0%}", self.README)
+        up = lambda d: (median(d, "min-12", "replica_seconds") / median(d, "min-2", "replica_seconds") - 1) * 100
+        self.assertIn(f"lifts goodput by {gain('pod-queues/warm-pool', 'min-12', 'min-2'):.1f} points for {up('pod-queues/warm-pool'):.1f}% more", self.README)
+        self.assertIn(f"it lifted it by {gain('warm-pool', 'min-12', 'min-2'):.1f} points for {up('warm-pool'):.1f}%", self.README)
+        cut = lambda d: (1 - median(d, "conc-down-30", "replica_seconds") / median(d, "conc-down-300", "replica_seconds")) * 100
+        self.assertIn(f"cuts cost by {cut('pod-queues/down-window'):.0f}%, not {cut('down-window'):.0f}%", self.README)
+        self.assertIn(f"serve {median('pod-queues/sync-period', 'instant', 'goodput') * 100:.1f}%", self.README)
+        self.assertIn(f"static pool of 24 serves {median('pod-queues/signals', 'static-24', 'goodput') * 100:.1f}%", self.README)
+
+    def test_the_win_counts_in_the_prose(self):
+        def wins(prefix, other):
+            doc = results.read(ROOT / "results" / prefix / "signals") if prefix else results.read(ROOT / "results" / "signals")
+            g = {(r["policy"], r["seed"]): r["goodput"] for r in doc["runs"]}
+            return sum(g[("hpa-concurrency", s)] > g[(other, s)] for s in range(1, 9))
+        self.assertEqual([wins("", o) for o in ("hpa-queue", "hpa-utilization", "hpa-rps")], [8, 8, 8])
+        self.assertEqual([wins("pod-queues", o) for o in ("hpa-queue", "hpa-utilization", "hpa-rps")], [5, 8, 8])
+        self.assertIn("wins five of eight", self.README)
+        self.assertIn("beat slot utilization and request rate in all eight runs", self.README)
+        for prefix in ("", "pod-queues"):
+            doc = results.read(ROOT / "results" / prefix / "startup") if prefix else results.read(ROOT / "results" / "startup")
+            g = {(r["policy"], r["seed"]): r["goodput"] for r in doc["runs"]}
+            self.assertTrue(all(g[("startup-10s", s)] > g[("startup-45s", s)] for s in range(1, 9)))

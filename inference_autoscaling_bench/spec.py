@@ -80,6 +80,20 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
     return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica, minimum, sync, pod_queues)
 
 
+def with_route(text: str, route: str) -> str:
+    """The spec `text` with `route=<route>` added and its label unchanged, so a dataset re-run with another route is
+    labelled exactly as the original is."""
+    label, eq, body = text.partition("=") if "=" in text.split(":", 1)[0] else ("", "", text)
+    kind, colon, options = body.partition(":")
+    if "route=" in options:
+        raise ValueError(f"{text!r} already sets a route")
+    joined = f"{kind}:{options + ',' if options else ''}route={route}"
+    if label:
+        return f"{label}={joined}"
+    # An unlabelled spec's label is its own text, which a label cannot hold (it has a colon): it gets the route in it.
+    return joined if options else f"{kind}={joined}"
+
+
 def _number(kind, what, value):
     try:
         return kind(value)

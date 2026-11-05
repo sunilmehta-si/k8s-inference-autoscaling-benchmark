@@ -13,7 +13,7 @@ from . import __version__, client as load_client, cluster, compare, experiment, 
 from .metrics import summarize
 from .policies import SIGNALS, Bounds
 from .sim import simulate
-from .spec import parse
+from .spec import parse, with_route
 
 
 def _specs(texts: list[str]):
@@ -27,7 +27,7 @@ def cmd_policies(args) -> int:
     print("static-N                a fixed pool of N pods")
     for name, (_, target) in SIGNALS.items():
         print(f"{'hpa-' + name:<24}the HPA on {name}, default target {target:g} per pod")
-    print("\nA spec is [label=]policy[:key=value,...]. Keys: target, down, up_window, tolerance, up_pods, up_percent, startup, min, sync.")
+    print("\nA spec is [label=]policy[:key=value,...]. Keys: target, down, up_window, tolerance, up_pods, up_percent, startup, min, sync, route.")
     return 0
 
 
@@ -49,14 +49,14 @@ def cmd_run(args) -> int:
     bounds = Bounds(args.min_replicas, args.max_replicas)
     for spec in _specs(args.policy):
         own = bounds if spec.min_replicas is None else Bounds(spec.min_replicas, bounds.max_replicas)
-        summary = summarize(simulate(trace, w, spec.make(), spec.replica, own, spec.sync_s), w)
+        summary = summarize(simulate(trace, w, spec.make(), spec.replica, own, spec.sync_s, spec.pod_queues, args.seed), w)
         print(f"{spec.label}: " + ", ".join(f"{key} {fmt(summary[key])}" for key, _, fmt, _ in report.METRICS))
     return 0
 
 
 def cmd_matrix(args) -> int:
     w = workloads.load(args.workload)
-    specs = _specs(args.policy)
+    specs = _specs([with_route(t, args.route) for t in args.policy] if args.route else args.policy)
     bounds = Bounds(args.min_replicas, args.max_replicas)
     seeds = list(range(1, args.runs + 1))
     rows, kept = experiment.run_matrix(w, specs, seeds, bounds, keep_runs_for=seeds[0])
@@ -132,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--runs", type=int, default=8)
     p.add_argument("--out", required=True)
     p.add_argument("--title")
+    p.add_argument("--route", choices=["central", "pod"],
+                   help="send every policy through one shared queue (the default) or a queue per pod")
     p.set_defaults(func=cmd_matrix)
 
     p = sub.add_parser("client", help="replay a workload's trace against an endpoint (runs inside the cluster)")
