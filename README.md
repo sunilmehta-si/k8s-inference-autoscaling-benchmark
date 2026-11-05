@@ -122,11 +122,14 @@ twelve 30-minute runs. What it shows, and what it does not:
   on the cluster, instead of 32. So the earlier ranking of `hpa-utilization` came from the shared queue, not from the
   signal. The cluster is still worse than either model for that policy, by 15 points of goodput against the queue per pod.
 
+The seven datasets above were run with one shared queue. [`results/pod-queues`](results/pod-queues/README.md) runs them
+again with a queue per pod, as behind a Service: pod startup is still the biggest lever, but requests in the system no
+longer clearly beat queue depth, standing headroom helps half as much, and a shorter scale-down window saves less.
+
 ## Status
 
 The simulation, its seven datasets, the cluster stage's runner and comparison, and the first cluster dataset are built.
-Not yet built: an explanation of what is left of the cluster's tail and of its lower goodput for `hpa-utilization`; the
-results of the other seven datasets re-run with a queue per pod; KEDA reading the same signals, a predictive policy,
+Not yet built: an explanation of what is left of the cluster's tail and of its lower goodput for `hpa-utilization`; KEDA reading the same signals, a predictive policy,
 and a workload with a gentler ramp, to find where reactive scaling is enough.
 
 ## Related projects

@@ -9,6 +9,10 @@
   agree for every policy, because `hpa-utilization`'s do not (7.7 s against 0.28 s).
 
 ### Added
+- `iab matrix --route pod` and `make results-pod-queues`: the seven datasets again with a queue per pod, in
+  `results/pod-queues`. Pod startup stays the biggest lever; requests in the system beat queue depth in five of eight runs
+  instead of eight; standing headroom lifts goodput by 6.1 points instead of 13.2; and with pods and decisions in one
+  second 95.8% of requests are served in time, not every one.
 - `route=pod` for any policy spec: each request goes to a random ready pod when it arrives and waits in that pod's own
   queue, as behind a Kubernetes Service, instead of in one shared queue. Run against the cluster's twelve runs, it moves
   every policy toward them (the p95 first token of `hpa-concurrency` goes from 45 s to 85 s against 121 s on the cluster,

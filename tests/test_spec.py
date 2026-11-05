@@ -90,3 +90,18 @@ class RouteTests(unittest.TestCase):
     def test_any_other_route_is_refused(self):
         with self.assertRaises(ValueError):
             spec.parse("hpa-concurrency:route=random")
+
+
+class WithRouteTests(unittest.TestCase):
+    def test_the_route_is_added_and_a_label_is_kept(self):
+        for text, label in (("static-24", "static-24"), ("target-3=hpa-concurrency:target=3", "target-3"), ("limit=hpa-concurrency", "limit")):
+            with self.subTest(text=text):
+                s = spec.parse(spec.with_route(text, "pod"))
+                self.assertTrue(s.pod_queues)
+                self.assertEqual(s.label, label)
+
+    def test_an_unlabelled_spec_with_options_keeps_them_and_a_route_already_set_is_refused(self):
+        s = spec.parse(spec.with_route("hpa-queue:down=60", "pod"))
+        self.assertTrue(s.pod_queues)
+        with self.assertRaises(ValueError):
+            spec.with_route("hpa-queue:route=central", "pod")
