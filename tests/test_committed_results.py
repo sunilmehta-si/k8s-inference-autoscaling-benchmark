@@ -145,19 +145,49 @@ class ClusterResultsTests(unittest.TestCase):
             med = lambda side: statistics.median(r[side]["scale_ups"] for r in self.DOC["rows"] if r["policy"] == policy)
             self.assertLessEqual(abs(med("cluster") - med("simulation")), 1)
 
-    def test_the_ranking_of_the_signals_differs(self):
+    def test_the_ranking_of_the_signals_differs_with_one_queue_and_matches_with_a_queue_per_pod(self):
         rows = self.DOC["rows"]
         order = lambda side: sorted(("hpa-concurrency", "hpa-queue", "hpa-utilization"), key=lambda p: -self.goodput(rows, p, side))
         self.assertEqual(order("cluster"), ["hpa-concurrency", "hpa-queue", "hpa-utilization"])
         self.assertEqual(order("simulation"), ["hpa-concurrency", "hpa-utilization", "hpa-queue"])
-        self.assertIn(f"`hpa-queue` is second ({self.goodput(rows, 'hpa-queue', 'cluster') * 100:.1f}%)", FLAT)
-        self.assertIn(f"`hpa-utilization` last ({self.goodput(rows, 'hpa-utilization', 'cluster') * 100:.1f}%", FLAT)
+        self.assertEqual(order("simulation_pods"), order("cluster"))
+        pct = lambda p, side: f"{self.goodput(rows, p, side) * 100:.1f}%"
+        for text in (f"`hpa-utilization` second ({pct('hpa-utilization', 'simulation')}) and `hpa-queue` last ({pct('hpa-queue', 'simulation')})",
+                     f"`hpa-queue` second ({pct('hpa-queue', 'simulation_pods')}) and `hpa-utilization` last ({pct('hpa-utilization', 'simulation_pods')})",
+                     f"on the cluster ({pct('hpa-queue', 'cluster')} and {pct('hpa-utilization', 'cluster')})"):
+            self.assertIn(text, FLAT)
+        gap = (self.goodput(rows, "hpa-utilization", "simulation_pods") - self.goodput(rows, "hpa-utilization", "cluster")) * 100
+        self.assertIn(f"by {gap:.0f} points of goodput against the queue per pod", FLAT)
+
+    def test_a_queue_per_pod_moves_the_tail_toward_the_cluster_and_the_readme_quotes_it(self):
+        def p95(policy, side):
+            return statistics.median(r[side]["ttft_p95_ms"] for r in self.DOC["rows"] if r["policy"] == policy)
+        fmt = lambda ms: f"{ms / 1000:.0f} s" if ms >= 10000 else f"{ms:,.0f} ms"
+        for policy in ("hpa-concurrency", "hpa-utilization", "static-24"):
+            with self.subTest(policy=policy):
+                self.assertLess(p95(policy, "simulation"), p95(policy, "simulation_pods"))
+                self.assertLess(p95(policy, "simulation_pods"), p95(policy, "cluster"))
+        self.assertGreater(p95("hpa-queue", "simulation_pods"), p95("hpa-queue", "cluster"))   # it overshoots
+        for text in (f"from {fmt(p95('hpa-concurrency', 'simulation'))} to {fmt(p95('hpa-concurrency', 'simulation_pods'))} against {fmt(p95('hpa-concurrency', 'cluster'))}",
+                     f"from {fmt(p95('hpa-utilization', 'simulation'))} to {fmt(p95('hpa-utilization', 'simulation_pods'))} against {fmt(p95('hpa-utilization', 'cluster'))}",
+                     f"from {fmt(p95('static-24', 'simulation'))} to {fmt(p95('static-24', 'simulation_pods'))} against {fmt(p95('static-24', 'cluster'))}",
+                     f"{fmt(p95('hpa-queue', 'simulation_pods'))} against {fmt(p95('hpa-queue', 'cluster'))}"):
+            self.assertIn(text, FLAT)
+
+    def test_utilization_is_the_one_policy_whose_median_first_token_disagrees(self):
+        med = lambda policy, side: statistics.median(r[side]["ttft_p50_ms"] for r in self.DOC["rows"] if r["policy"] == policy)
+        self.assertGreater(med("hpa-utilization", "cluster"), 7000)
+        self.assertIn(f"{med('hpa-utilization', 'cluster') / 1000:.1f} s on the cluster against {med('hpa-utilization', 'simulation') / 1000:.2f} s", FLAT)
+
+    def test_the_median_peak_of_utilization_with_a_queue_per_pod_is_the_clusters(self):
+        peak = lambda side: statistics.median(r[side]["peak_replicas"] for r in self.DOC["rows"] if r["policy"] == "hpa-utilization")
+        self.assertEqual((peak("cluster"), peak("simulation_pods"), peak("simulation")), (26, 26, 32))
 
     def test_static_scaling_misses_the_objective_on_the_cluster_only(self):
-        self.assertIn(f"serves {self.goodput(self.DOC['rows'], 'static-24', 'cluster') * 100:.1f}% within the objective", FLAT)
+        self.assertLess(self.goodput(self.DOC["rows"], "static-24", "cluster"), 1.0)
         self.assertEqual(self.goodput(self.DOC["rows"], "static-24", "simulation"), 1.0)
 
-    def test_utilization_peaks_below_the_ceiling_on_the_cluster(self):
+    def test_utilization_peaks_below_the_ceiling_on_the_cluster_in_every_seed(self):
         peaks = sorted(r["cluster"]["peak_replicas"] for r in self.DOC["rows"] if r["policy"] == "hpa-utilization")
         self.assertEqual((peaks[0], peaks[-1]), (26, 28))
 

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+- `iab compare` runs the simulation twice, with one shared queue and with a queue per pod, and `results/cluster` shows
+  both beside the cluster. With a queue per pod the simulation ranks the signals as the cluster does (concurrency, queue,
+  utilization) and `hpa-utilization` peaks at 26 pods as on the cluster; the README no longer says the cluster's medians
+  agree for every policy, because `hpa-utilization`'s do not (7.7 s against 0.28 s).
+
 ### Added
 - `route=pod` for any policy spec: each request goes to a random ready pod when it arrives and waits in that pod's own
   queue, as behind a Kubernetes Service, instead of in one shared queue. Run against the cluster's twelve runs, it moves
