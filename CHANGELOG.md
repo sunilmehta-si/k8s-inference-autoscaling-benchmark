@@ -1,26 +1,31 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0] - 2026-11-05
 
-### Changed
-- `iab compare` runs the simulation twice, with one shared queue and with a queue per pod, and `results/cluster` shows
-  both beside the cluster. With a queue per pod the simulation ranks the signals as the cluster does (concurrency, queue,
-  utilization) and `hpa-utilization` peaks at 26 pods as on the cluster; the README no longer says the cluster's medians
-  agree for every policy, because `hpa-utilization`'s do not (7.7 s against 0.28 s).
+The model is checked against the real thing. Twelve 30-minute runs of the real Horizontal Pod Autoscaler, Prometheus and
+prometheus-adapter on a kind cluster, in front of simulated vLLM pods, each set beside the simulation on the same seed.
 
 ### Added
+- `results/cluster`: the `burst` workload, four policies, three seeds. Medians and the scaling decisions of
+  `hpa-concurrency` and `hpa-queue` agree with the simulation; the 95th-percentile first token is higher on the cluster
+  in all 12 runs; `hpa-utilization` does much worse on the cluster than with one shared queue (40.9% against 72.3%).
+- `route=pod` for any policy spec: each request goes to a random ready pod when it arrives and waits in that pod's own
+  queue, as behind a Kubernetes Service, instead of in one shared queue. It moves every policy toward the cluster (the
+  p95 first token of `hpa-concurrency` goes from 45 s to 85 s against 121 s on the cluster, and `static-24` from 642 ms
+  to 914 ms against 1,038 ms) and ranks the signals as the cluster does. What is left of the tail is not explained.
 - `iab matrix --route pod` and `make results-pod-queues`: the seven datasets again with a queue per pod, in
   `results/pod-queues`. Pod startup stays the biggest lever; requests in the system beat queue depth in five of eight runs
   instead of eight; standing headroom lifts goodput by 6.1 points instead of 13.2; and with pods and decisions in one
   second 95.8% of requests are served in time, not every one.
-- `route=pod` for any policy spec: each request goes to a random ready pod when it arrives and waits in that pod's own
-  queue, as behind a Kubernetes Service, instead of in one shared queue. Run against the cluster's twelve runs, it moves
-  every policy toward them (the p95 first token of `hpa-concurrency` goes from 45 s to 85 s against 121 s on the cluster,
-  and `static-24` from 642 ms to 914 ms against 1,038 ms), so most of the tail gap is the queueing, not the autoscaler.
-- `results/cluster`: twelve 30-minute runs on a kind cluster (the `burst` workload, four policies, three seeds), each
-  beside the simulation on the same seed. Medians and the scaling decisions of `hpa-concurrency` and `hpa-queue` agree;
-  the 95th-percentile first token is higher on the cluster in all 12 runs; `hpa-utilization` does much worse on the
-  cluster than in the simulation (40.9% against 72.3%), which is not explained yet.
+- The cluster stage: `deploy/` (pinned kind, Prometheus and prometheus-adapter), `scripts/`, the `cluster` and
+  `cluster-run` workflows, an open-loop load client and `iab cluster-run`. It runs in CI only; the scripts refuse any
+  kubectl context but `kind-iab`.
+
+### Changed
+- `iab compare` runs the simulation twice, with one shared queue and with a queue per pod, and `results/cluster` shows
+  both beside the cluster.
+- The README no longer says the cluster's medians agree for every policy, because `hpa-utilization`'s do not (7.7 s
+  against 0.28 s).
 
 ## [0.1.0] - 2026-11-04
 
