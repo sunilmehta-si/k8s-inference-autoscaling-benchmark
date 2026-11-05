@@ -47,6 +47,7 @@ class BuildTests(unittest.TestCase):
         for row in doc["rows"]:
             self.assertIn("goodput", row["cluster"])
             self.assertIn("goodput", row["simulation"])
+            self.assertIn("goodput", row["simulation_pods"])
             self.assertNotIn("source", row["cluster"])
 
     def test_the_markdown_states_the_setup_and_the_difference(self):
@@ -55,7 +56,7 @@ class BuildTests(unittest.TestCase):
         self.assertIn("### `hpa-concurrency`", text)
         self.assertIn("2 seeds (1, 2)", text)
         self.assertIn("Pods start in 20 s, scale-down window 300 s", text)
-        self.assertIn("| Metric | Cluster | Simulation | Cluster minus simulation |", text)
+        self.assertIn("| Metric | Cluster | One shared queue | Queue per pod | Cluster minus one queue | Cluster minus queue per pod |", text)
         self.assertIn("Requests the cluster did not answer: 0 of 366.", text)
         self.assertIn("### Run by run", text)
 
@@ -92,3 +93,16 @@ class LoadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PodQueueTests(unittest.TestCase):
+    def test_the_queue_per_pod_simulation_differs_from_the_shared_queue_one_under_load(self):
+        burst = workload.load(ROOT / "workloads/burst.json")
+        run = cluster_run(startup=45.0)
+        one = compare.simulate_like(run, burst)
+        per_pod = compare.simulate_like(run, burst, pod_queues=True)
+        self.assertGreater(per_pod["ttft_p95_ms"], one["ttft_p95_ms"])
+
+    def test_build_carries_both_simulations(self):
+        row = compare.build("T", SMOKE, [cluster_run()])["rows"][0]
+        self.assertEqual(set(row["simulation"]), set(row["simulation_pods"]))

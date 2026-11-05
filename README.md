@@ -105,20 +105,28 @@ settings. It runs in CI only: the scripts refuse any kubectl context but `kind-i
 The first comparison is [results/cluster](results/cluster/README.md): the `burst` workload, four policies, three seeds each,
 twelve 30-minute runs. What it shows, and what it does not:
 
-- **Medians and scaling decisions agree.** Median first-token latency is within 60 ms of the simulation for every policy,
-  and `hpa-concurrency` and `hpa-queue` scale up as many times and to the same peak as the simulation.
-- **The tail does not.** The 95th-percentile first-token latency is higher on the cluster than in the simulation in all 12 runs.
-  Even `static-24`, which never scales, serves 97.7% within the objective on the cluster against 100% in the simulation.
-  The likely cause is that each pod keeps its own queue behind the Service, while the simulation has one shared queue.
-  That is a hypothesis; it has not been tested yet.
-- **The signal ranking changes.** The simulation puts `hpa-utilization` second and `hpa-queue` last. On the cluster
-  `hpa-queue` is second (70.3%) and `hpa-utilization` last (40.9%, peak 26 to 28 pods instead of 32). Why the cluster's
-  utilization signal under-scales is not explained yet, so treat the simulation's ranking of that policy with caution.
+- **Medians and scaling decisions agree, for three policies.** The median first-token latency of `hpa-concurrency`,
+  `hpa-queue` and `static-24` is within 60 ms of the simulation, and the first two scale up as many times and to the
+  same peak. `hpa-utilization` is the exception: its median first token is 7.7 s on the cluster against 0.28 s in the
+  simulation.
+- **The tail is worse on the cluster in all 12 runs, and a queue per pod explains much of it.** The simulation's
+  default is one shared queue. With `route=pod`, each request goes to a random ready pod and waits in that pod's own
+  queue, as behind a Service, and a pod added later cannot take work already queued elsewhere. That moves the
+  simulation toward the cluster for three policies: the median 95th-percentile first token of `hpa-concurrency` goes
+  from 45 s to 85 s against 121 s on the cluster, `hpa-utilization` from 43 s to 81 s against 165 s, and `static-24`,
+  which never scales, from 642 ms to 914 ms against 1,038 ms. For `hpa-queue` it overshoots: 115 s against 88 s.
+  A queue per pod does not close the gap; what is left is not explained.
+- **A queue per pod also gives the cluster's ranking of the signals.** With one shared queue the simulation puts
+  `hpa-utilization` second (72.3%) and `hpa-queue` last (64.3%). With a queue per pod it puts `hpa-queue` second (79.9%)
+  and `hpa-utilization` last (56.2%), as on the cluster (70.3% and 40.9%), and `hpa-utilization` has a median peak of 26 pods, as
+  on the cluster, instead of 32. So the earlier ranking of `hpa-utilization` came from the shared queue, not from the
+  signal. The cluster is still worse than either model for that policy, by 15 points of goodput against the queue per pod.
 
 ## Status
 
 The simulation, its seven datasets, the cluster stage's runner and comparison, and the first cluster dataset are built.
-Not yet built: a per-pod queue in the simulation, to test the tail gap; an explanation of the utilization gap; KEDA reading the same signals, a predictive policy,
+Not yet built: an explanation of what is left of the cluster's tail and of its lower goodput for `hpa-utilization`; the
+results of the other seven datasets re-run with a queue per pod; KEDA reading the same signals, a predictive policy,
 and a workload with a gentler ramp, to find where reactive scaling is enough.
 
 ## Related projects
