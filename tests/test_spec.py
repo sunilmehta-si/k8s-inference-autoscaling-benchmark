@@ -78,3 +78,15 @@ class MatrixTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RouteTests(unittest.TestCase):
+    def test_route_pod_turns_on_per_pod_queues_and_central_is_the_default(self):
+        self.assertFalse(spec.parse("hpa-concurrency").pod_queues)
+        self.assertFalse(spec.parse("hpa-concurrency:route=central").pod_queues)
+        self.assertTrue(spec.parse("hpa-concurrency:route=pod").pod_queues)
+        self.assertTrue(spec.parse("static-4:route=pod").pod_queues)
+
+    def test_any_other_route_is_refused(self):
+        with self.assertRaises(ValueError):
+            spec.parse("hpa-concurrency:route=random")

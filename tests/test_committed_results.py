@@ -160,3 +160,36 @@ class ClusterResultsTests(unittest.TestCase):
     def test_utilization_peaks_below_the_ceiling_on_the_cluster(self):
         peaks = sorted(r["cluster"]["peak_replicas"] for r in self.DOC["rows"] if r["policy"] == "hpa-utilization")
         self.assertEqual((peaks[0], peaks[-1]), (26, 28))
+
+
+class PodQueueClaimTests(unittest.TestCase):
+    """The changelog says per-pod queues move the simulation toward the cluster; this re-runs both and checks it."""
+    DOC = results.read(ROOT / "results" / "cluster")
+    CHANGELOG = re.sub(r"\s+", " ", (ROOT / "CHANGELOG.md").read_text())
+
+    @classmethod
+    def p95(cls, policy, route):
+        w = workload.load(ROOT / "workloads" / "burst.json")
+        opts = "startup=45" + (",down=300" if policy.startswith("hpa") else "")
+        s = spec.parse(f"{policy}:{opts},route={route}")
+        vals = []
+        for seed in (1, 2, 3):
+            run = sim.simulate(workload.generate(w, seed), w, s.make(), s.replica, Policy_bounds(), s.sync_s, s.pod_queues, seed)
+            vals.append(metrics.summarize(run, w)["ttft_p95_ms"])
+        return statistics.median(vals)
+
+    def test_per_pod_queues_are_between_one_queue_and_the_cluster_for_the_two_policies_quoted(self):
+        for policy, central_text, pod_text in (("hpa-concurrency", "45 s", "85 s"), ("static-24", "642 ms", "914 ms")):
+            with self.subTest(policy=policy):
+                central, pod = self.p95(policy, "central"), self.p95(policy, "pod")
+                cluster = statistics.median(r["cluster"]["ttft_p95_ms"] for r in self.DOC["rows"] if r["policy"] == policy)
+                self.assertLess(central, pod)
+                self.assertLess(pod, cluster)
+                fmt = lambda ms: f"{ms / 1000:.0f} s" if ms >= 10000 else f"{ms:,.0f} ms"
+                self.assertEqual((fmt(central), fmt(pod)), (central_text, pod_text))
+                self.assertIn(central_text, self.CHANGELOG)
+                self.assertIn(pod_text, self.CHANGELOG)
+
+
+def Policy_bounds():
+    return Bounds(2, 32)

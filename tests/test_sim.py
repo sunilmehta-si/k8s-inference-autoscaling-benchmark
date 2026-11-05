@@ -128,3 +128,47 @@ class WholeRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PodQueueTests(unittest.TestCase):
+    """With pod_queues each request is sent to a ready pod when it arrives and waits in that pod's own queue."""
+
+    def run_pod(self, rows, policy, replica, seed=0):
+        return sim.simulate(trace(*rows), tiny_workload(60), policy, replica, ONE, pod_queues=True, route_seed=seed)
+
+    def test_a_request_alone_is_served_exactly_as_with_one_queue(self):
+        a = run([(1.0, 400, 10)], Static(2))
+        b = self.run_pod([(1.0, 400, 10)], Static(2), sim.Replica())
+        self.assertEqual((a.wait, a.ttft, a.latency), (b.wait, b.ttft, b.latency))
+
+    def test_work_queued_on_a_pod_does_not_move_to_a_pod_that_becomes_ready_later(self):
+        # One busy slot, a long queue behind it, then a second pod ready at t=25. With one queue the new pod takes the
+        # waiting requests at once; with per-pod queues they stay where they were sent.
+        rows = [(1.0, 400, 2000)] + [(2.0 + i * 0.01, 400, 10) for i in range(4)]
+        script, replica = {15.0: 2}, sim.Replica(slots=1, startup_s=10)
+        central = sim.simulate(trace(*rows), tiny_workload(60), Scripted(1, script), replica, ONE)
+        per_pod = self.run_pod(rows, Scripted(1, script), replica)
+        self.assertLess(central.wait[1], 24.0)         # the new pod starts the first of them at t=25
+        self.assertGreater(per_pod.wait[1], 38.0)      # it waits for the busy pod: 1 + 0.1 + 2000 * 0.02 - 2
+        self.assertEqual(per_pod.max_queue, central.max_queue)
+
+    def test_the_same_seed_gives_the_same_run_and_the_route_is_random_across_ready_pods(self):
+        rows = [(1.0 + i * 0.001, 400, 100) for i in range(40)]
+        waits = lambda seed: self.run_pod(rows, Static(4), sim.Replica(slots=2), seed).wait
+        self.assertEqual(waits(3), waits(3))
+        self.assertNotEqual(waits(3), waits(4))
+
+    def test_every_request_is_served_and_cost_is_unchanged_by_the_queue_model(self):
+        rows = [(1.0 + i * 0.5, 400, 40) for i in range(60)]
+        a = run(rows, Static(3), sim.Replica(slots=2), duration=90)
+        b = sim.simulate(trace(*rows), tiny_workload(90), Static(3), sim.Replica(slots=2), ONE, pod_queues=True)
+        self.assertEqual(a.replica_seconds, b.replica_seconds)
+        self.assertEqual(len(b.wait), 60)
+        self.assertTrue(all(t > 0 for t in b.ttft))
+
+    def test_a_draining_pod_finishes_the_requests_already_queued_on_it(self):
+        rows = [(1.0, 400, 1000)] + [(2.0, 400, 10)] * 6
+        scale = Scripted(4, {15.0: 1})
+        r = self.run_pod(rows, scale, sim.Replica(slots=1, startup_s=5), seed=1)
+        self.assertEqual(len(r.latency), 7)
+        self.assertTrue(all(x > 0 for x in r.latency))
