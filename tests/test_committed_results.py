@@ -352,3 +352,90 @@ class MetricsLagClaimTests(unittest.TestCase):
             self.assertEqual(r["simulation_lag"], r["simulation_pods"])
         gap = self.med("static-24", "cluster", "ttft_p95_ms") - self.med("static-24", "simulation_lag", "ttft_p95_ms")
         self.assertIn(f"remaining {gap:.0f} ms", self.README)
+
+
+class RampTests(unittest.TestCase):
+    """results/ramps: the same deployment on four ramps; the README's ramp section, claim by claim."""
+
+    RAMPS = (30, 120, 300, 600)
+
+    def doc(self, ramp):
+        return results.read(ROOT / "results" / "ramps" / f"ramp-{ramp}")
+
+    def runs(self, ramp, policy):
+        return {r["seed"]: r for r in self.doc(ramp)["runs"] if r["policy"] == policy}
+
+    def test_the_four_ramps_differ_only_in_how_long_the_ramp_takes(self):
+        loaded = [workload.load(ROOT / "workloads" / f"ramp-{r}.json") for r in self.RAMPS]
+        for ramp, w in zip(self.RAMPS, loaded):
+            with self.subTest(ramp=ramp):
+                self.assertEqual(w.schedule[1:3], ((300.0, 3.0), (300.0 + ramp, 20.0)))
+                sizes = lambda x: (x.prompt_median, x.prompt_sigma, x.prompt_max, x.output_median, x.output_sigma, x.output_max, x.slo_ttft_s)
+                self.assertEqual(sizes(w), sizes(workload.load(ROOT / "workloads/burst.json")))
+
+    def test_every_dataset_is_the_makefiles_and_regenerates_exactly(self):
+        from inference_autoscaling_bench import chart
+        self.assertEqual(sorted(p.parent.name for p in (ROOT / "results" / "ramps").glob("*/runs.json")),
+                         sorted(f"ramp-{r}" for r in self.RAMPS))
+        self.assertIn("for r in 30 120 300 600", (ROOT / "Makefile").read_text())
+        for ramp in self.RAMPS:
+            with self.subTest(ramp=ramp):
+                d = ROOT / "results" / "ramps" / f"ramp-{ramp}"
+                doc = results.read(d)
+                self.assertEqual([p["label"] for p in doc["policies"]], ["static-24", "hpa-concurrency", "hpa-utilization", "cluster-like"])
+                self.assertEqual(sorted({r["seed"] for r in doc["runs"]}), list(range(1, 9)))
+                self.assertEqual((d / "README.md").read_text(), report.markdown(doc))
+                self.assertEqual((d / "chart.svg").read_text(), chart.svg(doc))
+
+    def test_the_first_run_of_every_policy_is_reproduced_from_its_spec(self):
+        for ramp in self.RAMPS:
+            doc = self.doc(ramp)
+            w = workload.load(ROOT / "workloads" / f"ramp-{ramp}.json")
+            trace = workload.generate(w, 1)
+            for policy in doc["policies"]:
+                with self.subTest(ramp=ramp, policy=policy["label"]):
+                    s = spec.parse(policy["text"])
+                    got = metrics.summarize(sim.simulate(trace, w, s.make(), s.replica, Bounds(), s.sync_s, s.pod_queues, 1,
+                                                         s.metrics_lag_s), w)
+                    saved = next(r for r in doc["runs"] if r["policy"] == policy["label"] and r["seed"] == 1)
+                    self.assertAlmostEqual(saved["goodput"], got["goodput"], places=12)
+                    self.assertAlmostEqual(saved["ttft_p95_ms"], got["ttft_p95_ms"], places=6)
+
+    def test_concurrency_rises_with_every_longer_ramp_in_every_run_and_the_readme_quotes_the_medians(self):
+        for seed in range(1, 9):
+            g = [self.runs(r, "hpa-concurrency")[seed]["goodput"] for r in self.RAMPS]
+            self.assertEqual(g, sorted(g), seed)
+            self.assertEqual(len(set(g)), 4)
+        quoted = ", ".join(f"{median(f'ramps/ramp-{r}', 'hpa-concurrency', 'goodput') * 100:.1f}%" for r in self.RAMPS[:3])
+        self.assertIn(f"{quoted} and {median('ramps/ramp-600', 'hpa-concurrency', 'goodput') * 100:.1f}%", FLAT)
+
+    def test_at_600_s_concurrency_costs_the_quoted_share_of_the_static_pool(self):
+        c, s = self.runs(600, "hpa-concurrency"), self.runs(600, "static-24")
+        shares = [c[i]["replica_seconds"] / s[i]["replica_seconds"] for i in c]
+        self.assertIn(f"costs {min(shares) * 100:.0f}–{max(shares) * 100:.0f}% of `static-24`", FLAT)
+
+    def test_the_better_signal_flips_between_the_short_and_the_long_ramps_in_every_run(self):
+        for ramp, utilization_wins in ((30, False), (120, False), (300, True), (600, True)):
+            u, c = self.runs(ramp, "hpa-utilization"), self.runs(ramp, "hpa-concurrency")
+            for seed in c:
+                with self.subTest(ramp=ramp, seed=seed):
+                    self.assertEqual(u[seed]["goodput"] >= c[seed]["goodput"], utilization_wins)
+
+    def test_cluster_like_is_below_concurrency_everywhere_and_never_above_the_quoted_ceiling(self):
+        top = 0.0
+        for ramp in self.RAMPS:
+            k, c = self.runs(ramp, "cluster-like"), self.runs(ramp, "hpa-concurrency")
+            for seed in c:
+                self.assertLess(k[seed]["goodput"], c[seed]["goodput"], (ramp, seed))
+            top = max(top, max(r["goodput"] for r in k.values()))
+        self.assertIn(f"no run serves more than {top * 100:.1f}% in time", FLAT)
+
+    def test_on_the_600_s_ramp_the_queue_per_pod_costs_more_than_the_lag_and_static_24_barely_notices(self):
+        from inference_autoscaling_bench import experiment
+        w = workload.load(ROOT / "workloads/ramp-600.json")
+        specs = [spec.parse(s) for s in ("pod=hpa-concurrency:route=pod", "lag=hpa-concurrency:lag=30", "s24=static-24:route=pod")]
+        rows, _ = experiment.run_matrix(w, specs, list(range(1, 9)), Bounds())
+        med = lambda label: statistics.median(r["goodput"] for r in rows if r["policy"] == label) * 100
+        self.assertLess(med("pod"), med("lag"))
+        self.assertIn(f"a queue per pod alone gives {med('pod'):.1f}% and the lag alone {med('lag'):.1f}%", FLAT)
+        self.assertIn(f"`static-24` with a queue per pod serves {med('s24'):.1f}%", FLAT)
