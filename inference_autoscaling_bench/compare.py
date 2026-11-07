@@ -2,8 +2,10 @@
 
 The simulation is run here, not read from a file: for each cluster run it gets the same workload, the same seed (so the
 same trace), the same policy and the same pod startup, minimum, maximum and scale-down window the cluster was given. Any
-difference is then the model's, not the setup's. It is run twice: with one shared queue, the default, and with a queue per
-pod (`route=pod`), which is closer to a Kubernetes Service."""
+difference is then the model's, not the setup's. It is run three times: with one shared queue, the default; with a queue
+per pod (`route=pod`), which is closer to a Kubernetes Service; and with a queue per pod and the cluster's metrics lag
+(`lag=METRICS_LAG_S`): Prometheus scrapes every 15 s and the recording rules the adapter serves are evaluated every 15 s,
+so the autoscaler acts on a signal up to 30 s old (deploy/monitoring.yaml; a test holds the two together)."""
 from __future__ import annotations
 
 import json
@@ -15,6 +17,8 @@ from .experiment import run_matrix
 from .policies import Bounds
 from .spec import parse
 from .workload import Workload
+
+METRICS_LAG_S = 30.0   # scrape interval + rule evaluation interval in deploy/monitoring.yaml
 
 COMPARED = [
     ("goodput", "Goodput (TTFT within the objective)", lambda v: f"{v * 100:.1f}%"),
@@ -38,12 +42,12 @@ def load_cluster_runs(directory: str | Path) -> list[dict]:
     return runs
 
 
-def simulate_like(run: dict, workload: Workload, pod_queues: bool = False) -> dict:
+def simulate_like(run: dict, workload: Workload, pod_queues: bool = False, lag_s: float = 0.0) -> dict:
     """The simulation's summary for the cluster run's policy, seed and settings."""
     cfg = run["config"]
     policy = run["summary"]["policy"]
     options = (f"startup={cfg['startup_s']:g}" + (f",down={cfg['down_window_s']:g}" if policy.startswith("hpa-") else "")
-               + (",route=pod" if pod_queues else ""))
+               + (",route=pod" if pod_queues else "") + (f",lag={lag_s:g}" if lag_s else ""))
     spec = parse(f"{policy}:{options}")
     rows, _ = run_matrix(workload, [spec], [run["summary"]["seed"]], Bounds(cfg["min_replicas"], cfg["max_replicas"]))
     return {k: v for k, v in rows[0].items() if k not in ("policy", "seed")}
@@ -56,6 +60,7 @@ def build(title: str, workload: Workload, cluster_runs: list[dict]) -> dict:
         rows.append({"policy": run["summary"]["policy"], "seed": run["summary"]["seed"], "config": run["config"],
                      "cluster": summary, "simulation": simulate_like(run, workload),
                      "simulation_pods": simulate_like(run, workload, pod_queues=True),
+                     "simulation_lag": simulate_like(run, workload, pod_queues=True, lag_s=METRICS_LAG_S),
                      "client": run["client"], "events": run["events"]})
     return {"title": title, "workload": {"name": workload.name, "duration_s": workload.duration_s, "slo_ttft_s": workload.slo_ttft_s},
             "rows": rows}
@@ -78,30 +83,37 @@ def markdown(doc: dict) -> str:
     lines = [f"## {doc['title']}", "",
              f"Workload [{w['name']}](../../workloads/{w['name']}.json), {w['duration_s'] / 60:.0f} minutes, objective a first token within "
              f"{w['slo_ttft_s']:g} s. Each seed is one run on a kind cluster (the real Horizontal Pod Autoscaler, Prometheus and "
-             "prometheus-adapter, simulated vLLM pods) and two runs of the simulation on the same trace with the same settings: "
-             "one with a single shared queue, and one with a queue per pod, each request sent to a random ready pod when it "
-             "arrives, as behind a Kubernetes Service. Each cell is the median over the seeds, with the lowest and highest in brackets.", ""]
+             "prometheus-adapter, simulated vLLM pods) and three runs of the simulation on the same trace with the same settings: "
+             "one with a single shared queue; one with a queue per pod, each request sent to a random ready pod when it "
+             "arrives, as behind a Kubernetes Service; and one with a queue per pod and the autoscaler acting on the signal "
+             f"as it was {METRICS_LAG_S:g} s earlier, as the cluster's Prometheus scrape and rule intervals make it. Each cell is the median over the seeds, with the lowest and highest in brackets.", ""]
     for policy in policies:
         rows = [r for r in doc["rows"] if r["policy"] == policy]
         cfg = rows[0]["config"]
         lines += [f"### `{policy}`", "",
                   f"{len(rows)} {'seed' if len(rows) == 1 else 'seeds'} ({', '.join(str(r['seed']) for r in rows)}). Pods start in {cfg['startup_s']:g} s"
                   + (f", scale-down window {cfg['down_window_s']:g} s" if policy.startswith("hpa-") else "") + ".", "",
-                  "| Metric | Cluster | One shared queue | Queue per pod | Cluster minus one queue | Cluster minus queue per pod |",
-                  "|---|---|---|---|---|---|"]
+                  "| Metric | Cluster | One shared queue | Queue per pod | Queue per pod, lag | Cluster minus one queue "
+                  "| Cluster minus queue per pod | Cluster minus queue per pod, lag |",
+                  "|---|---|---|---|---|---|---|---|"]
         for key, name, fmt in COMPARED:
             c = [r["cluster"][key] for r in rows]
             s = [r["simulation"][key] for r in rows]
             q = [r["simulation_pods"][key] for r in rows]
-            lines.append(f"| {name} | {_cell(c, fmt)} | {_cell(s, fmt)} | {_cell(q, fmt)} | {_diff(c, s, key, fmt)} | {_diff(c, q, key, fmt)} |")
+            g = [r["simulation_lag"][key] for r in rows]
+            lines.append(f"| {name} | {_cell(c, fmt)} | {_cell(s, fmt)} | {_cell(q, fmt)} | {_cell(g, fmt)} | {_diff(c, s, key, fmt)} "
+                         f"| {_diff(c, q, key, fmt)} | {_diff(c, g, key, fmt)} |")
         failed = sum(r["client"]["failed"] for r in rows)
         lines += ["", f"Requests the cluster did not answer: {failed:,} of {sum(r['client']['requests'] for r in rows):,}.", ""]
-    lines += ["### Run by run", "", "| Policy | Seed | Goodput, cluster | Goodput, one queue | Goodput, queue per pod | TTFT p95 (ms), cluster | TTFT p95 (ms), one queue | TTFT p95 (ms), queue per pod | Pods at peak, cluster | Pods at peak, simulation |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
+    lines += ["### Run by run", "", "| Policy | Seed | Goodput, cluster | Goodput, one queue | Goodput, queue per pod | Goodput, queue per pod, lag "
+              "| TTFT p95 (ms), cluster | TTFT p95 (ms), one queue | TTFT p95 (ms), queue per pod | TTFT p95 (ms), queue per pod, lag "
+              "| Pods at peak, cluster | Pods at peak, simulation |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in doc["rows"]:
-        c, s, q = r["cluster"], r["simulation"], r["simulation_pods"]
-        lines.append(f"| `{r['policy']}` | {r['seed']} | {c['goodput'] * 100:.1f}% | {s['goodput'] * 100:.1f}% | {q['goodput'] * 100:.1f}% | "
-                     f"{c['ttft_p95_ms']:,.0f} | {s['ttft_p95_ms']:,.0f} | {q['ttft_p95_ms']:,.0f} | {c['peak_replicas']:,.0f} | {s['peak_replicas']:,.0f} |")
+        c, s, q, g = r["cluster"], r["simulation"], r["simulation_pods"], r["simulation_lag"]
+        lines.append(f"| `{r['policy']}` | {r['seed']} | {c['goodput'] * 100:.1f}% | {s['goodput'] * 100:.1f}% | {q['goodput'] * 100:.1f}% "
+                     f"| {g['goodput'] * 100:.1f}% | {c['ttft_p95_ms']:,.0f} | {s['ttft_p95_ms']:,.0f} | {q['ttft_p95_ms']:,.0f} "
+                     f"| {g['ttft_p95_ms']:,.0f} | {c['peak_replicas']:,.0f} | {s['peak_replicas']:,.0f} |")
     lines.append("")
     return "\n".join(lines)
 

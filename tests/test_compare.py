@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -48,6 +49,7 @@ class BuildTests(unittest.TestCase):
             self.assertIn("goodput", row["cluster"])
             self.assertIn("goodput", row["simulation"])
             self.assertIn("goodput", row["simulation_pods"])
+            self.assertIn("goodput", row["simulation_lag"])
             self.assertNotIn("source", row["cluster"])
 
     def test_the_markdown_states_the_setup_and_the_difference(self):
@@ -56,7 +58,8 @@ class BuildTests(unittest.TestCase):
         self.assertIn("### `hpa-concurrency`", text)
         self.assertIn("2 seeds (1, 2)", text)
         self.assertIn("Pods start in 20 s, scale-down window 300 s", text)
-        self.assertIn("| Metric | Cluster | One shared queue | Queue per pod | Cluster minus one queue | Cluster minus queue per pod |", text)
+        self.assertIn("| Metric | Cluster | One shared queue | Queue per pod | Queue per pod, lag | Cluster minus one queue "
+                      "| Cluster minus queue per pod | Cluster minus queue per pod, lag |", text)
         self.assertIn("Requests the cluster did not answer: 0 of 366.", text)
         self.assertIn("### Run by run", text)
 
@@ -106,3 +109,19 @@ class PodQueueTests(unittest.TestCase):
     def test_build_carries_both_simulations(self):
         row = compare.build("T", SMOKE, [cluster_run()])["rows"][0]
         self.assertEqual(set(row["simulation"]), set(row["simulation_pods"]))
+
+
+class MetricsLagTests(unittest.TestCase):
+    def test_the_lag_is_the_scrape_interval_plus_the_rule_interval_on_the_cluster(self):
+        text = (ROOT / "deploy/monitoring.yaml").read_text()
+        scrape = re.search(r"scrape_interval: (\d+)s", text).group(1)
+        rules = re.search(r"^ +interval: (\d+)s", text, re.M).group(1)   # the group that records the HPA signals
+        self.assertEqual(compare.METRICS_LAG_S, float(scrape) + float(rules))
+
+    def test_the_lagged_simulation_is_the_queue_per_pod_one_with_the_lag(self):
+        burst = workload.load(ROOT / "workloads/burst.json")
+        run = cluster_run(startup=45.0)
+        lagged = compare.simulate_like(run, burst, pod_queues=True, lag_s=compare.METRICS_LAG_S)
+        self.assertNotEqual(lagged, compare.simulate_like(run, burst, pod_queues=True))
+        rows, _ = experiment.run_matrix(burst, [spec.parse("hpa-concurrency:startup=45,down=300,route=pod,lag=30")], [1], Bounds(2, 32))
+        self.assertEqual(lagged, {k: v for k, v in rows[0].items() if k not in ("policy", "seed")})

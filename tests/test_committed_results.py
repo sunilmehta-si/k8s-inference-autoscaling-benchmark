@@ -304,3 +304,51 @@ class PodQueueDatasetTests(unittest.TestCase):
             doc = results.read(ROOT / "results" / prefix / "startup") if prefix else results.read(ROOT / "results" / "startup")
             g = {(r["policy"], r["seed"]): r["goodput"] for r in doc["runs"]}
             self.assertTrue(all(g[("startup-10s", s)] > g[("startup-45s", s)] for s in range(1, 9)))
+
+
+class MetricsLagClaimTests(unittest.TestCase):
+    """The README's metrics-lag bullet, number by number."""
+
+    DOC = results.read(ROOT / "results" / "cluster")
+    README = (ROOT / "README.md").read_text()
+    HPA = ("hpa-concurrency", "hpa-queue", "hpa-utilization")
+
+    def med(self, policy, model, key):
+        return statistics.median(r[model][key] for r in self.DOC["rows"] if r["policy"] == policy)
+
+    def test_goodput_with_the_lag_is_within_the_quoted_points_for_every_hpa_policy(self):
+        gaps = [abs(self.med(p, "simulation_lag", "goodput") - self.med(p, "cluster", "goodput")) * 100 for p in self.HPA]
+        self.assertLessEqual(max(gaps), 3.2 + 0.05)
+        self.assertGreater(max(gaps), 3.1)   # "within 3.2 points" is the largest gap, not a loose bound
+        for p in self.HPA:
+            with self.subTest(policy=p):
+                quoted = f"`{p}` {self.med(p, 'simulation_lag', 'goodput') * 100:.1f}% against {self.med(p, 'cluster', 'goodput') * 100:.1f}%"
+                self.assertIn(quoted, " ".join(self.README.split()))
+
+    def test_the_concurrency_tail_matches_and_the_utilization_tail_is_shorter(self):
+        s = lambda p, m: round(self.med(p, m, "ttft_p95_ms") / 1000)
+        self.assertEqual(s("hpa-concurrency", "simulation_lag"), s("hpa-concurrency", "cluster"))
+        self.assertIn(f"`hpa-concurrency` is {s('hpa-concurrency', 'cluster')} s on both", " ".join(self.README.split()))
+        self.assertLess(s("hpa-utilization", "simulation_lag"), s("hpa-utilization", "cluster"))
+        self.assertIn(f"({s('hpa-utilization', 'simulation_lag')} s against {s('hpa-utilization', 'cluster')} s)", " ".join(self.README.split()))
+
+    def test_15_and_45_seconds_fit_goodput_less_well_for_concurrency_and_utilization(self):
+        from inference_autoscaling_bench import compare, workload
+        burst = workload.load(ROOT / "workloads/burst.json")
+        for policy in ("hpa-concurrency", "hpa-utilization"):
+            rows = [r for r in self.DOC["rows"] if r["policy"] == policy]
+            cluster = statistics.median(r["cluster"]["goodput"] for r in rows)
+            def gap(lag):
+                return abs(statistics.median(
+                    compare.simulate_like({"config": r["config"], "summary": {"policy": policy, "seed": r["seed"]}}, burst,
+                                          pod_queues=True, lag_s=lag)["goodput"] for r in rows) - cluster)
+            with self.subTest(policy=policy):
+                self.assertLess(gap(30), gap(15))
+                self.assertLess(gap(30), gap(45))
+
+    def test_static_24_is_untouched_by_the_lag_and_its_gap_is_quoted(self):
+        rows = [r for r in self.DOC["rows"] if r["policy"] == "static-24"]
+        for r in rows:
+            self.assertEqual(r["simulation_lag"], r["simulation_pods"])
+        gap = self.med("static-24", "cluster", "ttft_p95_ms") - self.med("static-24", "simulation_lag", "ttft_p95_ms")
+        self.assertIn(f"remaining {gap:.0f} ms", self.README)

@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from inference_autoscaling_bench import experiment, spec, workload
 from inference_autoscaling_bench.policies import Hpa, Static
@@ -105,3 +106,22 @@ class WithRouteTests(unittest.TestCase):
         self.assertTrue(s.pod_queues)
         with self.assertRaises(ValueError):
             spec.with_route("hpa-queue:route=central", "pod")
+
+
+class LagTests(unittest.TestCase):
+    def test_lag_is_parsed_for_an_hpa_and_a_static_pool(self):
+        self.assertEqual(spec.parse("hpa-queue:lag=30").metrics_lag_s, 30.0)
+        self.assertEqual(spec.parse("static-4:lag=15").metrics_lag_s, 15.0)
+
+    def test_no_lag_is_the_default(self):
+        self.assertEqual(spec.parse("hpa-queue").metrics_lag_s, 0.0)
+
+    def test_a_negative_or_non_numeric_lag_is_refused(self):
+        for text in ("hpa-queue:lag=-5", "hpa-queue:lag=soon"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                spec.parse(text)
+
+    def test_the_matrix_passes_the_lag_to_the_simulation(self):
+        w = workload.load(Path(__file__).resolve().parent.parent / "workloads/burst.json")
+        rows, _ = experiment.run_matrix(w, [spec.parse("a=hpa-concurrency"), spec.parse("b=hpa-concurrency:lag=30")], [1])
+        self.assertNotEqual(rows[0]["goodput"], rows[1]["goodput"])

@@ -14,6 +14,9 @@ What is modelled, and where it is a simplification (docs/methodology.md says why
   takes no new requests, finishes the ones it has, and stops costing when it is empty. Nothing is dropped.
 * The autoscaler runs every `sync_period_s` seconds (15, the HPA default, unless a spec says otherwise) and sees the
   exact state at that instant. The scale-up limit applies per sync, which equals per 15 s only at the default period.
+  With `metrics_lag_s` it sees the signal (requests running and waiting, and the arrival rate) as it was at the latest
+  sync at least that many seconds earlier, the way an HPA reads a value Prometheus scraped and a recording rule
+  evaluated a while ago; the pod counts stay current, so pods that became ready since count as having no load yet.
 """
 from __future__ import annotations
 
@@ -73,7 +76,9 @@ class Run:
 
 def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: Replica = Replica(),
              bounds: Bounds = Bounds(), sync_period_s: float = SYNC_PERIOD_S, pod_queues: bool = False,
-             route_seed: int = 0) -> Run:
+             route_seed: int = 0, metrics_lag_s: float = 0.0) -> Run:
+    if metrics_lag_s < 0:
+        raise ValueError("the metrics lag cannot be negative")
     n = len(trace)
     duration = workload.duration_s
     wait, ttft, latency = [0.0] * n, [0.0] * n, [0.0] * n
@@ -89,6 +94,7 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
     arrivals: deque[float] = deque()
     timeline: list[tuple[float, int, int, int, int]] = []
     events: list[tuple[float, int]] = []
+    seen: list[tuple[float, int, int, float]] = []   # (second, running, queued, arrival rate) at every sync
 
     def push(t: float, kind: int, payload: object) -> None:
         nonlocal counter
@@ -175,13 +181,14 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
             ready = [p for p in pods if p.state == "ready"]
             pending = [p for p in pods if p.state == "pending"]
             timeline.append((now, len(ready), len(pending), state["running"], queued()))
-            if now == 0.0:
-                continue  # the autoscaler's first sync is one period after the start
             while arrivals and arrivals[0] <= now - RATE_WINDOW_S:
                 arrivals.popleft()
             window = min(now, RATE_WINDOW_S)
-            obs = Observation(now, len(ready), len(pending), state["running"], queued(), replica.slots,
-                              len(arrivals) / window if window > 0 else 0.0)
+            seen.append((now, state["running"], queued(), len(arrivals) / window if window > 0 else 0.0))
+            if now == 0.0:
+                continue  # the autoscaler's first sync is one period after the start
+            _, running, waiting, rate = _as_of(seen, now - metrics_lag_s)
+            obs = Observation(now, len(ready), len(pending), running, waiting, replica.slots, rate)
             desired = policy.decide(obs, bounds)
             if desired is None:
                 continue
@@ -207,3 +214,11 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
     cost = sum(max(0.0, min(p.died if p.died is not None else duration, duration) - min(p.born, duration)) for p in pods)
     return Run(policy.name, workload.name, duration, [r.arrival for r in trace], wait, ttft, latency, timeline, events,
                cost, state["peak"], state["max_queue"])
+
+
+def _as_of(seen: list[tuple[float, int, int, float]], t: float) -> tuple[float, int, int, float]:
+    """The latest sample taken at or before `t`, or the one at the start if `t` is before it."""
+    for sample in reversed(seen):
+        if sample[0] <= t + 1e-9:
+            return sample
+    return seen[0]

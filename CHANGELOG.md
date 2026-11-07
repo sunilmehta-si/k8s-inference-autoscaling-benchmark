@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `lag` for any policy spec: the autoscaler acts on the signal (requests running and waiting, and the arrival rate) as
+  it was at the latest sync at least that many seconds earlier, as when it reads it through Prometheus; pod counts
+  stay current.
+- `iab compare` runs a third model, a queue per pod with the cluster's 30 s metrics lag (Prometheus scrape interval
+  plus recording-rule interval, held together by a test), and `results/cluster` shows it. With it the median goodput
+  of every HPA policy is within 3.2 points of the cluster, and `hpa-concurrency`'s median p95 first token is 121 s on
+  both. The README says what is still not explained.
+
 ## [0.2.0] - 2026-11-05
 
 The model is checked against the real thing. Twelve 30-minute runs of the real Horizontal Pod Autoscaler, Prometheus and
