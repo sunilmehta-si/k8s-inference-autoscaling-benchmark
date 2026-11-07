@@ -115,7 +115,15 @@ twelve 30-minute runs. What it shows, and what it does not:
   simulation toward the cluster for three policies: the median 95th-percentile first token of `hpa-concurrency` goes
   from 45 s to 85 s against 121 s on the cluster, `hpa-utilization` from 43 s to 81 s against 165 s, and `static-24`,
   which never scales, from 642 ms to 914 ms against 1,038 ms. For `hpa-queue` it overshoots: 115 s against 88 s.
-  A queue per pod does not close the gap; what is left is not explained.
+  A queue per pod does not close the gap on its own.
+- **The rest is mostly metrics lag.** The cluster's autoscaler reads each signal through Prometheus, which scrapes every
+  15 s, and a recording rule evaluated every 15 s, so it acts on a value up to 30 s old; the simulation saw the exact
+  state. With a queue per pod and `lag=30`, the median goodput of every HPA policy is within 3.2 points of the cluster
+  (`hpa-concurrency` 75.1% against 76.4%, `hpa-queue` 73.5% against 70.3%, `hpa-utilization` 38.3% against 40.9%), and
+  the median 95th-percentile first token of `hpa-concurrency` is 121 s on both. The tail of `hpa-utilization` is still
+  shorter in the model (131 s against 165 s). The 30 s comes from the configuration, and a test holds the two together;
+  lags of 15 and 45 s fit goodput less well for `hpa-concurrency` and `hpa-utilization`. `static-24` never scales, so
+  lag cannot move it, and its remaining 124 ms at the 95th percentile is not explained.
 - **A queue per pod also gives the cluster's ranking of the signals.** With one shared queue the simulation puts
   `hpa-utilization` second (72.3%) and `hpa-queue` last (64.3%). With a queue per pod it puts `hpa-queue` second (79.9%)
   and `hpa-utilization` last (56.2%), as on the cluster (70.3% and 40.9%), and `hpa-utilization` has a median peak of 26 pods, as
