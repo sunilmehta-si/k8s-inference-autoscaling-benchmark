@@ -1,0 +1,9 @@
+{
+  "name": "ramp-600",
+  "description": "One ramp from 3 to 20 requests per second over 600 s after five quiet minutes, five minutes at the peak, then quiet again. The ramp-30, ramp-120, ramp-300 and ramp-600 workloads differ only in how long the ramp takes; the request sizes and objective are those of burst.",
+  "duration_s": 1500,
+  "schedule": [[0, 3], [300, 3], [900, 20], [1200, 20], [1230, 3], [1500, 3]],
+  "prompt_tokens": {"median": 600, "sigma": 0.8, "max": 4000},
+  "output_tokens": {"median": 120, "sigma": 0.7, "max": 600},
+  "slo_ttft_s": 2.0
+}

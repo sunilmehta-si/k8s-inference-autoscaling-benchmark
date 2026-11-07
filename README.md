@@ -96,6 +96,25 @@ pod lifecycle. `policies.py` is the HPA algorithm, step by step, behind four sig
 `chart.py` turn runs into the numbers, tables and chart. Everything is deterministic: the same workload, seed and
 policy give the same run on any machine and Python version, and the committed results are checked by re-running them.
 
+## Where reactive scaling is enough
+
+Every dataset above uses a ramp from 3 to 20 requests per second in 30 seconds. [`results/ramps`](results/ramps) asks
+how slow a ramp must be for the HPA to keep up: four workloads that differ only in how long the same ramp takes (30, 120,
+300 and 600 s), eight runs each, with `static-24`, `hpa-concurrency`, `hpa-utilization`, and `cluster-like`, which is
+`hpa-concurrency` with a queue per pod and the 30 s metrics lag the cluster has (`make results-ramps`). The policies and
+ramps were chosen before the runs.
+
+- **In the model, a ten-minute ramp is slow enough.** `hpa-concurrency` serves 79.5%, 88.0%, 94.6% and 99.2% of
+  requests in time on the four ramps (medians), more on each longer ramp in all eight runs, and at 600 s it costs
+  46–55% of `static-24`.
+- **The best signal depends on the ramp.** `hpa-utilization` is below `hpa-concurrency` on the 30 s and 120 s ramps
+  and at or above it on the 300 s and 600 s ramps, in every run.
+- **With the cluster's queue per pod and metrics lag, no ramp is slow enough.** `cluster-like` is below
+  `hpa-concurrency` in every run on every ramp, and no run serves more than 91.8% in time, even at 600 s. Most of the
+  gap is the queue per pod: on the 600 s ramp a queue per pod alone gives 93.2% and the lag alone 97.7% (medians). It
+  is not random routing in itself, since `static-24` with a queue per pod serves 99.8%; it is random routing to pods the
+  HPA keeps near its target of 6 requests on 8 slots, where one unlucky pod queues while another has room.
+
 ## The cluster stage
 
 [`docs/cluster.md`](docs/cluster.md): the same policies on the same seeded traces on a kind cluster, with the real
@@ -140,7 +159,7 @@ longer clearly beat queue depth, standing headroom helps half as much, and a sho
 The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, and a model
 with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points are built. Not yet built:
 an explanation of what is left of `hpa-utilization`'s tail on the cluster; KEDA reading the same signals, a predictive
-policy, and a workload with a gentler ramp, to find where reactive scaling is enough.
+policy, and the ramps on the cluster.
 
 ## Related projects
 
