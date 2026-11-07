@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `results/ramps` and `make results-ramps`: four workloads that differ only in how long one ramp from 3 to 20 requests
+  per second takes (30, 120, 300 and 600 s), with `static-24`, `hpa-concurrency`, `hpa-utilization` and
+  `cluster-like` (`hpa-concurrency` with a queue per pod and `lag=30`), eight runs each. In the model a ten-minute ramp
+  is slow enough (99.2% in time at about half the static pool's cost); with a queue per pod and the lag no run gets
+  above 91.8%, mostly because of random routing to pods kept near the target. The better signal flips from requests
+  in the system to slot utilization at the 300 s ramp.
+
 ## [0.3.0] - 2026-11-07
 
 Most of what was left of the gap between the cluster and the model is metrics lag: the real autoscaler acts on a signal
