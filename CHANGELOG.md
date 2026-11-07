@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] - 2026-11-07
+
+Where reactive scaling is enough: the same deployment on ramps of 30 s to 10 minutes. In the model a ten-minute ramp is
+slow enough; with the cluster's queue per pod and metrics lag, none is.
 
 ### Added
 - `results/ramps` and `make results-ramps`: four workloads that differ only in how long one ramp from 3 to 20 requests

@@ -157,7 +157,8 @@ longer clearly beat queue depth, standing headroom helps half as much, and a sho
 ## Status
 
 The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, and a model
-with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points are built. Not yet built:
+with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points, and four ramps that show
+where reactive scaling is enough are built. Not yet built:
 an explanation of what is left of `hpa-utilization`'s tail on the cluster; KEDA reading the same signals, a predictive
 policy, and the ramps on the cluster.
 
