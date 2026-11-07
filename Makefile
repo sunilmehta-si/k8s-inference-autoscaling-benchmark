@@ -1,7 +1,7 @@
 # Everyday commands. Python 3.10+; the package has no dependencies (pip install -e . for the iab command).
 PY ?= python3
 
-.PHONY: test results results-pod-queues clean
+.PHONY: test results results-pod-queues results-ramps clean
 
 test:  ## run the unit tests
 	$(PY) -W error::SyntaxWarning -m unittest discover -s tests -t .
@@ -45,6 +45,13 @@ results:  ## regenerate every committed dataset from the workloads (a few second
 
 results-pod-queues:  ## the same datasets with a queue per pod, in results/pod-queues
 	$(call DATASETS,results/pod-queues,--route pod)
+
+results-ramps:  ## the same deployment on ramps of 30, 120, 300 and 600 s, in results/ramps
+	for r in 30 120 300 600; do \
+	  $(PY) -m inference_autoscaling_bench matrix workloads/ramp-$$r.json --runs 8 --out results/ramps/ramp-$$r \
+	    --title "A ramp from 3 to 20 requests per second over $$r s" \
+	    -p static-24 -p hpa-concurrency -p hpa-utilization -p cluster-like=hpa-concurrency:route=pod,lag=30 || exit 1; \
+	done
 
 clean:
 	rm -rf build dist *.egg-info
