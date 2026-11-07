@@ -172,3 +172,63 @@ class PodQueueTests(unittest.TestCase):
         r = self.run_pod(rows, scale, sim.Replica(slots=1, startup_s=5), seed=1)
         self.assertEqual(len(r.latency), 7)
         self.assertTrue(all(x > 0 for x in r.latency))
+
+
+class Recorder(Static):
+    """A fixed pool that writes down what the autoscaler saw at every sync."""
+
+    def __init__(self, replicas):
+        super().__init__(replicas)
+        self.seen = []
+
+    def decide(self, obs, bounds):
+        self.seen.append((obs.now, obs.ready, obs.running + obs.queued))
+        return None
+
+
+class MetricsLagTests(unittest.TestCase):
+    """With metrics_lag_s the autoscaler acts on the signal from the latest sync at least that long ago."""
+
+    ROWS = [(20.0 + i * 0.01, 400, 2000) for i in range(6)]   # six long requests arrive between the syncs at 15 and 30
+
+    def seen(self, lag):
+        policy = Recorder(2)
+        sim.simulate(trace(*self.ROWS), tiny_workload(90), policy, sim.Replica(), ONE, metrics_lag_s=lag)
+        return {t: load for t, _, load in policy.seen}
+
+    def test_without_lag_the_load_is_seen_at_the_first_sync_after_it_arrives(self):
+        self.assertEqual((self.seen(0)[15.0], self.seen(0)[30.0]), (0, 6))
+
+    def test_a_lag_of_one_period_shows_it_one_sync_later(self):
+        seen = self.seen(15)
+        self.assertEqual((seen[30.0], seen[45.0]), (0, 6))
+
+    def test_a_lag_between_syncs_rounds_back_to_the_older_sample(self):
+        seen = self.seen(20)
+        self.assertEqual((seen[30.0], seen[45.0], seen[60.0]), (0, 0, 6))
+
+    def test_before_the_start_the_autoscaler_sees_the_start(self):
+        self.assertEqual(self.seen(60)[15.0], 0)
+
+    def test_pod_counts_are_not_lagged(self):
+        policy = Recorder(3)
+        sim.simulate(trace(*self.ROWS), tiny_workload(90), policy, sim.Replica(), ONE, metrics_lag_s=45)
+        self.assertTrue(all(ready == 3 for _, ready, _ in policy.seen))
+
+    def test_no_lag_is_the_default(self):
+        burst = workload.load(ROOT / "workloads/burst.json")
+        reqs = workload.generate(burst, 1)
+        a = sim.simulate(reqs, burst, Hpa("concurrency"), sim.Replica(), Bounds())
+        b = sim.simulate(reqs, burst, Hpa("concurrency"), sim.Replica(), Bounds(), metrics_lag_s=0)
+        self.assertEqual((a.ttft, a.events), (b.ttft, b.events))
+
+    def test_lag_delays_the_first_scale_up_on_a_burst(self):
+        burst = workload.load(ROOT / "workloads/burst.json")
+        reqs = workload.generate(burst, 1)
+        first = lambda lag: sim.simulate(reqs, burst, Hpa("concurrency"), sim.Replica(), Bounds(),
+                                         metrics_lag_s=lag).events[0][0]
+        self.assertGreater(first(30), first(0))
+
+    def test_a_negative_lag_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "negative"):
+            sim.simulate(trace(*self.ROWS), tiny_workload(90), Static(1), sim.Replica(), ONE, metrics_lag_s=-1)

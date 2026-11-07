@@ -21,7 +21,8 @@ def run_matrix(workload: workloads.Workload, specs: list[Spec], seeds: list[int]
         trace = workloads.generate(workload, seed)
         for spec in specs:
             own = bounds if spec.min_replicas is None else replace(bounds, min_replicas=spec.min_replicas)
-            run = simulate(trace, workload, spec.make(), spec.replica, own, spec.sync_s, spec.pod_queues, seed)
+            run = simulate(trace, workload, spec.make(), spec.replica, own, spec.sync_s, spec.pod_queues, seed,
+                           spec.metrics_lag_s)
             rows.append({"policy": spec.label, "seed": seed, **summarize(run, workload)})
             if seed == keep_runs_for:
                 kept[spec.label] = run

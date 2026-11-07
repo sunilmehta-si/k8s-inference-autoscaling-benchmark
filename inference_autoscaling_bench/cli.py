@@ -27,7 +27,7 @@ def cmd_policies(args) -> int:
     print("static-N                a fixed pool of N pods")
     for name, (_, target) in SIGNALS.items():
         print(f"{'hpa-' + name:<24}the HPA on {name}, default target {target:g} per pod")
-    print("\nA spec is [label=]policy[:key=value,...]. Keys: target, down, up_window, tolerance, up_pods, up_percent, startup, min, sync, route.")
+    print("\nA spec is [label=]policy[:key=value,...]. Keys: target, down, up_window, tolerance, up_pods, up_percent, startup, min, sync, route, lag.")
     return 0
 
 
@@ -49,7 +49,8 @@ def cmd_run(args) -> int:
     bounds = Bounds(args.min_replicas, args.max_replicas)
     for spec in _specs(args.policy):
         own = bounds if spec.min_replicas is None else Bounds(spec.min_replicas, bounds.max_replicas)
-        summary = summarize(simulate(trace, w, spec.make(), spec.replica, own, spec.sync_s, spec.pod_queues, args.seed), w)
+        summary = summarize(simulate(trace, w, spec.make(), spec.replica, own, spec.sync_s, spec.pod_queues, args.seed,
+                                      spec.metrics_lag_s), w)
         print(f"{spec.label}: " + ", ".join(f"{key} {fmt(summary[key])}" for key, _, fmt, _ in report.METRICS))
     return 0
 

@@ -7,8 +7,9 @@
 
 Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA; startup
 (seconds before a new pod is ready), min (the fewest pods, the standing headroom) and sync (seconds between the
-autoscaler's decisions) for any policy, and route (`central`, the default: one shared queue; `pod`: each request is
-sent to a random ready pod when it arrives and waits in that pod's own queue, as behind a Kubernetes Service).
+autoscaler's decisions) for any policy, route (`central`, the default: one shared queue; `pod`: each request is
+sent to a random ready pod when it arrives and waits in that pod's own queue, as behind a Kubernetes Service), and lag
+(seconds: the autoscaler acts on the signal as it was that long ago, as when it reads it through Prometheus).
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ class Spec:
     min_replicas: int | None = None   # overrides the matrix's minimum for this policy
     sync_s: float = SYNC_PERIOD_S
     pod_queues: bool = False
+    metrics_lag_s: float = 0.0
 
 
 def parse(text: str, base: Replica = Replica()) -> Spec:
@@ -59,25 +61,30 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
         if route not in ("central", "pod"):
             raise ValueError(f"route must be central or pod, not {route!r}")
         pod_queues = route == "pod"
+    lag = 0.0
+    if "lag" in params:
+        lag = _number(float, "lag", params.pop("lag"))
+        if lag < 0:
+            raise ValueError("lag cannot be negative")
     if "startup" in params:
         replica = replace(base, startup_s=_number(float, "startup", params.pop("startup")))
     label = label or (body if options else kind)
     if kind.startswith("static-"):
         if params:
-            raise ValueError(f"a static pool takes no options besides startup, min, sync and route, not {', '.join(params)}")
+            raise ValueError(f"a static pool takes no options besides startup, min, sync, route and lag, not {', '.join(params)}")
         size = _number(int, "pool size", kind[len("static-"):])
         if size < 1:
             raise ValueError("a static pool needs at least one pod")
-        return Spec(label, text, lambda: Static(size), replica, minimum, sync, pod_queues)
+        return Spec(label, text, lambda: Static(size), replica, minimum, sync, pod_queues, lag)
     signal = kind[len("hpa-"):] if kind.startswith("hpa-") else ""
     if signal not in SIGNALS:
         raise ValueError(f"unknown policy {kind!r}: use static-N or hpa-<{'|'.join(SIGNALS)}>")
     arguments = {}
     for key, value in params.items():
         if key not in HPA_KEYS:
-            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min, sync, route")
+            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min, sync, route, lag")
         arguments[HPA_ARGUMENT.get(key, key)] = _number(HPA_KEYS[key], key, value)
-    return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica, minimum, sync, pod_queues)
+    return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica, minimum, sync, pod_queues, lag)
 
 
 def with_route(text: str, route: str) -> str:
