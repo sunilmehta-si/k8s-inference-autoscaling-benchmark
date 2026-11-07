@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0] - 2026-11-07
+
+Most of what was left of the gap between the cluster and the model is metrics lag: the real autoscaler acts on a signal
+up to 30 s old, read through a Prometheus scrape and a recording rule.
 
 ### Added
 - `lag` for any policy spec: the autoscaler acts on the signal (requests running and waiting, and the arrival rate) as

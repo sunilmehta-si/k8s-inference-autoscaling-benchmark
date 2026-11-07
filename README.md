@@ -14,7 +14,8 @@ needed**, and every number is reproducible from a seed.
 
 > **Status: a simulation.** The pod, the queue and the controller are modelled, not measured. The results compare
 > settings against one another; they are not benchmarks of a real cluster. [The methodology](docs/methodology.md) says
-> what the model includes, what it leaves out and what was chosen before the results. A cluster stage is the next step.
+> what the model includes, what it leaves out and what was chosen before the results. The cluster stage below checks
+> the model against the real HPA on a kind cluster.
 
 ![Demand, pods and queue for each signal in the first run](results/signals/chart.svg)
 
@@ -136,9 +137,10 @@ longer clearly beat queue depth, standing headroom helps half as much, and a sho
 
 ## Status
 
-The simulation, its seven datasets, the cluster stage's runner and comparison, and the first cluster dataset are built.
-Not yet built: an explanation of what is left of the cluster's tail and of its lower goodput for `hpa-utilization`; KEDA reading the same signals, a predictive policy,
-and a workload with a gentler ramp, to find where reactive scaling is enough.
+The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, and a model
+with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points are built. Not yet built:
+an explanation of what is left of `hpa-utilization`'s tail on the cluster; KEDA reading the same signals, a predictive
+policy, and a workload with a gentler ramp, to find where reactive scaling is enough.
 
 ## Related projects
 
