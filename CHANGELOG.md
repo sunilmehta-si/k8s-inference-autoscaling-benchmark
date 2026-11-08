@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- The README explains most of what is left of `hpa-utilization`'s tail on the cluster: utilization's ceiling of 1 caps
+  each scale-up step, so the lag is paid at every step, and the model is four times as sensitive to 15 s more lag on
+  utilization (+36 s at the 95th percentile) as on concurrency (+9 s). The cluster's tail sits at a 45 s lag and its
+  goodput at 30 s, and most of the gap is one seed. Tests hold each number.
+
 ## [0.4.0] - 2026-11-07
 
 Where reactive scaling is enough: the same deployment on ramps of 30 s to 10 minutes. In the model a ten-minute ramp is

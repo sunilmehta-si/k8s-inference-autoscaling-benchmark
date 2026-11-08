@@ -144,6 +144,15 @@ twelve 30-minute runs. What it shows, and what it does not:
   shorter in the model (131 s against 165 s). The 30 s comes from the configuration, and a test holds the two together;
   lags of 15 and 45 s fit goodput less well for `hpa-concurrency` and `hpa-utilization`. `static-24` never scales, so
   lag cannot move it, and its remaining 124 ms at the 95th percentile is not explained.
+- **Utilization is the signal most sensitive to the lag, and its tail on the cluster sits at about 45 s.** Busy slots over
+  slots cannot go above 1, so with a target of 0.6 one decision can grow the pods by at most 1/0.6 of the pods it counts;
+  a signal of requests in the system has no ceiling. Each step of a utilization ramp waits for the samples to show the
+  last step's pods busy, so the lag is paid again at every step. In the model, 15 s more lag (45 s instead of 30 s)
+  lengthens the median 95th-percentile first token of `hpa-utilization` by 36 s (131 s to 167 s, against 165 s on the
+  cluster) and of `hpa-concurrency` by 9 s. Goodput still fits 30 s better, so no one fixed lag fits the cluster, likely
+  because Prometheus scrapes each pod at its own offset within the 15 s and the controller averages samples of different
+  ages. Most of the gap is one seed: on seed 1 the queue peaked at 1,756 requests on the cluster against 1,313 in the
+  model, 78 s more at the 95th percentile; seeds 2 and 3 are within 31 s.
 - **A queue per pod also gives the cluster's ranking of the signals.** With one shared queue the simulation puts
   `hpa-utilization` second (72.3%) and `hpa-queue` last (64.3%). With a queue per pod it puts `hpa-queue` second (79.9%)
   and `hpa-utilization` last (56.2%), as on the cluster (70.3% and 40.9%), and `hpa-utilization` has a median peak of 26 pods, as
@@ -159,7 +168,7 @@ longer clearly beat queue depth, standing headroom helps half as much, and a sho
 The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, and a model
 with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points, and four ramps that show
 where reactive scaling is enough are built. Not yet built:
-an explanation of what is left of `hpa-utilization`'s tail on the cluster; KEDA reading the same signals, a predictive
+a model in which each pod's sample has its own age, which the tail of `hpa-utilization` points to; KEDA reading the same signals, a predictive
 policy, and the ramps on the cluster.
 
 ## Related projects
