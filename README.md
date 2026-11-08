@@ -115,6 +115,20 @@ ramps were chosen before the runs.
   is not random routing in itself, since `static-24` with a queue per pod serves 99.8%; it is random routing to pods the
   HPA keeps near its target of 6 requests on 8 slots, where one unlucky pod queues while another has room.
 
+[`results/cluster-ramps`](results/cluster-ramps) runs the 120 s and 600 s ramps on the kind cluster, three seeds each,
+with `static-24`, `hpa-concurrency` and `hpa-utilization` (the comparison in the next section), so the model's answer is
+checked against the real autoscaler at both ends.
+
+- **On the cluster, a ten-minute ramp is not slow enough, as the lagged model said.** `hpa-concurrency` serves 89.8%
+  of requests in time on the 600 s ramp (89.6–92.2% over the seeds), against 99.1% in the one-queue model and 91.1% in
+  the model with a queue per pod and the 30 s lag; that model is within 1.3 points of the cluster on every seed. On the
+  120 s ramp the cluster serves 82.9%, the lagged model 80.5%, within 4.9 points on every seed.
+- **The best signal depends on the ramp on the cluster too.** On the 600 s ramp `hpa-utilization` serves 94.2%
+  against `hpa-concurrency`'s 89.8%, above it on every seed, with a shorter tail (2.3 s against 4.5 s at the 95th
+  percentile) at 56–59% of `static-24`'s cost; on the 120 s ramp it serves 50.5% against 82.9%, below on every seed. The
+  lagged model puts both signals at 91.1% on the 600 s ramp, so it misses utilization's lead there by 2.4–4.1 points.
+- **Headroom still wins outright.** `static-24` serves 99.6% on both ramps on the cluster, as in every model.
+
 ## The cluster stage
 
 [`docs/cluster.md`](docs/cluster.md): the same policies on the same seeded traces on a kind cluster, with the real
@@ -165,11 +179,11 @@ longer clearly beat queue depth, standing headroom helps half as much, and a sho
 
 ## Status
 
-The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, and a model
-with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points, and four ramps that show
-where reactive scaling is enough are built. Not yet built:
-a model in which each pod's sample has its own age, which the tail of `hpa-utilization` points to; KEDA reading the same signals, a predictive
-policy, and the ramps on the cluster.
+The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, a model
+with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points, four ramps that show
+where reactive scaling is enough, and two of those ramps on the cluster are built. Not yet built:
+a model in which each pod's sample has its own age, which the tail of `hpa-utilization` points to; KEDA reading the same signals; a predictive
+policy; and the 30 s and 300 s ramps on the cluster.
 
 ## Related projects
 

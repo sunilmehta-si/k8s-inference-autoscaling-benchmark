@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- `results/cluster-ramps`: the 120 s and 600 s ramps on the kind cluster, three seeds each, with `static-24`,
+  `hpa-concurrency` and `hpa-utilization`, compared with the three models. On the cluster a ten-minute ramp is not slow
+  enough for `hpa-concurrency` (89.8% against 99.1% in the one-queue model), and the model with a queue per pod and the
+  30 s lag is within 1.3 points on every seed. `hpa-utilization` beats `hpa-concurrency` on the 600 s ramp (94.2%
+  against 89.8%) and loses on the 120 s ramp (50.5% against 82.9%), on every seed; the lagged model misses that lead by
+  2.4–4.1 points. The README's ramp section and status say so, and tests hold every number.
 - The README explains most of what is left of `hpa-utilization`'s tail on the cluster: utilization's ceiling of 1 caps
   each scale-up step, so the lag is paid at every step, and the model is four times as sensitive to 15 s more lag on
   utilization (+36 s at the 95th percentile) as on concurrency (+9 s). The cluster's tail sits at a 45 s lag and its
