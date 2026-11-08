@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-08
+
+The metrics pipeline modelled piece by piece, and all four ramps on the cluster. With each pod's sample given its own
+age, the model places the utilization flip, and utilization's lead on the ten-minute ramp, where the cluster does;
+the fixed 30 s lag, the pipeline's worst case, still fits requests in the system better.
+
 ### Added
 - `scrape=S`, a model of the metrics pipeline piece by piece: each pod is scraped every S seconds at its own offset, a
   rule evaluated every S seconds at its own offset sums the latest sample of every pod, and the autoscaler reads the
