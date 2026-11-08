@@ -58,8 +58,9 @@ class BuildTests(unittest.TestCase):
         self.assertIn("### `hpa-concurrency`", text)
         self.assertIn("2 seeds (1, 2)", text)
         self.assertIn("Pods start in 20 s, scale-down window 300 s", text)
-        self.assertIn("| Metric | Cluster | One shared queue | Queue per pod | Queue per pod, lag | Cluster minus one queue "
-                      "| Cluster minus queue per pod | Cluster minus queue per pod, lag |", text)
+        self.assertIn("| Metric | Cluster | One shared queue | Queue per pod | Queue per pod, lag | Queue per pod, scraped "
+                      "| Cluster minus one queue | Cluster minus queue per pod | Cluster minus queue per pod, lag "
+                      "| Cluster minus queue per pod, scraped |", text)
         self.assertIn("Requests the cluster did not answer: 0 of 366.", text)
         self.assertIn("### Run by run", text)
 
@@ -125,3 +126,56 @@ class MetricsLagTests(unittest.TestCase):
         self.assertNotEqual(lagged, compare.simulate_like(run, burst, pod_queues=True))
         rows, _ = experiment.run_matrix(burst, [spec.parse("hpa-concurrency:startup=45,down=300,route=pod,lag=30")], [1], Bounds(2, 32))
         self.assertEqual(lagged, {k: v for k, v in rows[0].items() if k not in ("policy", "seed")})
+
+
+class ScrapeModelTests(unittest.TestCase):
+    def test_the_interval_is_the_scrape_and_rule_interval_on_the_cluster(self):
+        text = (ROOT / "deploy/monitoring.yaml").read_text()
+        scrape = re.search(r"scrape_interval: (\d+)s", text).group(1)
+        rules = re.search(r"^ +interval: (\d+)s", text, re.M).group(1)
+        self.assertEqual((compare.SCRAPE_S, compare.SCRAPE_S), (float(scrape), float(rules)))
+
+    def test_the_scraped_simulation_is_the_queue_per_pod_one_with_the_interval(self):
+        burst = workload.load(ROOT / "workloads/burst.json")
+        run = cluster_run(startup=45.0)
+        scraped = compare.simulate_like(run, burst, pod_queues=True, scrape_s=compare.SCRAPE_S)
+        self.assertNotEqual(scraped, compare.simulate_like(run, burst, pod_queues=True))
+        self.assertNotEqual(scraped, compare.simulate_like(run, burst, pod_queues=True, lag_s=compare.METRICS_LAG_S))
+        rows, _ = experiment.run_matrix(burst, [spec.parse("hpa-concurrency:startup=45,down=300,route=pod,scrape=15")], [1], Bounds(2, 32))
+        self.assertEqual(scraped, {k: v for k, v in rows[0].items() if k not in ("policy", "seed")})
+
+    def test_build_carries_the_fourth_model_and_the_markdown_has_its_columns(self):
+        doc = compare.build("T", SMOKE, [cluster_run()])
+        self.assertIn("goodput", doc["rows"][0]["simulation_scrape"])
+        text = compare.markdown(doc)
+        self.assertIn("| Queue per pod, lag | Queue per pod, scraped | Cluster minus one queue ", text)
+        self.assertIn("| Cluster minus queue per pod, lag | Cluster minus queue per pod, scraped |", text)
+        self.assertIn("| Goodput, queue per pod, scraped | TTFT p95 (ms), cluster", text)
+        self.assertIn("four runs of the simulation", text)
+
+
+class RebuildTests(unittest.TestCase):
+    def test_rebuild_keeps_the_clusters_side_and_recomputes_the_models(self):
+        doc = compare.build("T", SMOKE, [cluster_run(seed=1), cluster_run(seed=2)])
+        stale = json.loads(json.dumps(doc))
+        for row in stale["rows"]:
+            for model in compare.MODELS:
+                row[model] = {"goodput": -1.0}
+        self.assertEqual(compare.rebuild(stale, SMOKE), doc)
+
+    def test_rebuild_refuses_another_workload(self):
+        doc = compare.build("T", SMOKE, [cluster_run()])
+        with self.assertRaisesRegex(ValueError, "is of smoke"):
+            compare.rebuild(doc, workload.load(ROOT / "workloads/burst.json"))
+
+    def test_the_recompare_command_rewrites_the_results_and_the_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            compare.write(out, compare.build("T", SMOKE, [cluster_run()]))
+            doc = compare.read(out)
+            doc["rows"][0]["simulation_scrape"]["goodput"] = -1.0
+            compare.write(out, doc)
+            self.assertIn("-100.0%", (out / "README.md").read_text())
+            self.assertEqual(cli.main(["recompare", str(out), "--workload", str(ROOT / "workloads/smoke.json")]), 0)
+            self.assertNotIn("-100.0%", (out / "README.md").read_text())
+            self.assertIn("goodput", compare.read(out)["rows"][0]["simulation_scrape"])

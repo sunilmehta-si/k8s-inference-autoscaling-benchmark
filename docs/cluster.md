@@ -32,7 +32,10 @@ These are the differences a cluster run can show, and why a comparison is worth 
   kube-proxy spreads connections without looking at load, so one pod can be idle while another has a queue.
 - **Metrics delay.** The simulation's autoscaler sees the exact state at each sync unless a spec sets `lag`. On the
   cluster the signal is a scrape, a rule evaluation and a query behind the truth, and then the controller's own sync
-  period. `iab compare` runs a third model with `lag=30`, the scrape interval plus the rule interval.
+  period. `iab compare` runs a third model with `lag=30`, the scrape interval plus the rule interval, and a fourth with
+  `scrape=15`, in which each pod is scraped at its own offset, a rule evaluated at its own offset sums the latest
+  samples, and the autoscaler reads the latest evaluation. `iab recompare DIR --workload W` runs the models again for a
+  committed comparison after the model changes, without the cluster's raw runs.
 - **One load factor.** The simulator slows every request by one factor as a pod fills, set to 1.55 at a full pod. The
   simulation slows prefill and decode separately, by about 1.44 and 1.53 at a full pod (0.5 and 0.6 times the share of
   the other slots that are busy).

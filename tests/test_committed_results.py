@@ -570,3 +570,90 @@ class RampTests(unittest.TestCase):
         self.assertLess(med("pod"), med("lag"))
         self.assertIn(f"a queue per pod alone gives {med('pod'):.1f}% and the lag alone {med('lag'):.1f}%", FLAT)
         self.assertIn(f"`static-24` with a queue per pod serves {med('s24'):.1f}%", FLAT)
+
+
+class SampledPipelineTests(unittest.TestCase):
+    """The fourth model, with each pod's sample given its own age: the README's two bullets on it, number by number."""
+
+    RAMPS = (30, 120, 300, 600)
+    DOCS = {r: results.read(ROOT / "results" / "cluster-ramps" / f"ramp-{r}") for r in RAMPS}
+    BURST = results.read(ROOT / "results" / "cluster")
+    README = " ".join((ROOT / "README.md").read_text().split())
+
+    def rows(self, doc, policy):
+        return sorted((r for r in doc["rows"] if r["policy"] == policy), key=lambda r: r["seed"])
+
+    def med(self, doc, policy, side, key="goodput"):
+        return statistics.median(r[side][key] for r in self.rows(doc, policy))
+
+    def series(self, policy, side):
+        return [self.med(self.DOCS[r], policy, side) * 100 for r in self.RAMPS]
+
+    @staticmethod
+    def quoted(values):
+        return ", ".join(f"{v:.1f}%" for v in values[:-1]) + f" and {values[-1]:.1f}%"
+
+    def test_every_comparison_carries_the_fourth_model_and_regenerates(self):
+        from inference_autoscaling_bench import compare
+        for name, doc in {"cluster": self.BURST, **{f"cluster-ramps/ramp-{r}": d for r, d in self.DOCS.items()}}.items():
+            with self.subTest(comparison=name):
+                for row in doc["rows"]:
+                    self.assertEqual(set(row["simulation_scrape"]), set(row["simulation_lag"]))
+                self.assertEqual((ROOT / "results" / name / "README.md").read_text(), compare.markdown(doc))
+
+    def test_the_fourth_model_is_the_spec_it_says(self):
+        from inference_autoscaling_bench import compare
+        burst = workload.load(ROOT / "workloads/burst.json")
+        row = self.rows(self.BURST, "hpa-utilization")[0]
+        run = {"config": row["config"], "summary": {"policy": "hpa-utilization", "seed": row["seed"]}}
+        got = compare.simulate_like(run, burst, pod_queues=True, scrape_s=15)
+        self.assertEqual(set(got), set(row["simulation_scrape"]))
+        for key, value in got.items():   # the last digit of a mean differs between Python versions
+            self.assertAlmostEqual(row["simulation_scrape"][key], value, delta=abs(value) * 1e-9 + 1e-9, msg=key)
+
+    def test_the_burst_numbers_and_the_largest_median_gaps(self):
+        g = lambda p, side: self.med(self.BURST, p, side) * 100
+        t = lambda p, side: round(self.med(self.BURST, p, side, "ttft_p95_ms") / 1000)
+        self.assertIn(f"`hpa-utilization` from {g('hpa-utilization', 'simulation_lag'):.1f}% to {g('hpa-utilization', 'simulation_scrape'):.1f}% "
+                      f"against {g('hpa-utilization', 'cluster'):.1f}% on the cluster, and its tail from {t('hpa-utilization', 'simulation_lag')} s "
+                      f"to {t('hpa-utilization', 'simulation_scrape')} s against {t('hpa-utilization', 'cluster')} s", self.README)
+        for p in ("hpa-queue", "hpa-concurrency"):
+            self.assertIn(f"`{p}` from {g(p, 'simulation_lag'):.1f}% to {g(p, 'simulation_scrape'):.1f}% against {g(p, 'cluster'):.1f}%", self.README)
+        hpa = ("hpa-concurrency", "hpa-queue", "hpa-utilization")
+        gap = lambda side: max(abs(g(p, side) - g(p, "cluster")) for p in hpa)
+        self.assertGreater(gap("simulation_scrape"), gap("simulation_lag"))
+        self.assertIn(f"largest median gap on the burst is {gap('simulation_scrape'):.1f} points against the fixed lag's {gap('simulation_lag'):.1f}", self.README)
+
+    def test_the_flip_and_utilizations_lead_fall_where_the_cluster_puts_them_on_every_seed(self):
+        for ramp in self.RAMPS:
+            for u, c in zip(self.rows(self.DOCS[ramp], "hpa-utilization"), self.rows(self.DOCS[ramp], "hpa-concurrency")):
+                with self.subTest(ramp=ramp, seed=u["seed"]):
+                    self.assertEqual(u["simulation_scrape"]["goodput"] > c["simulation_scrape"]["goodput"], ramp == 600)
+                    self.assertEqual(u["cluster"]["goodput"] > c["cluster"]["goodput"], ramp == 600)
+        d = self.DOCS[600]
+        u, c = self.med(d, "hpa-utilization", "simulation_scrape") * 100, self.med(d, "hpa-concurrency", "simulation_scrape") * 100
+        tails = (self.med(d, "hpa-utilization", "simulation_scrape", "ttft_p95_ms") / 1000, self.med(d, "hpa-concurrency", "simulation_scrape", "ttft_p95_ms") / 1000)
+        self.assertLess(tails[0], tails[1])
+        self.assertIn(f"above it on the 600 s ramp ({u:.1f}% against {c:.1f}%, with a shorter tail, {tails[0]:.1f} s against {tails[1]:.1f} s", self.README)
+
+    def test_utilization_is_within_the_quoted_points_and_the_fixed_lag_is_not(self):
+        scrape, cluster = self.series("hpa-utilization", "simulation_scrape"), self.series("hpa-utilization", "cluster")
+        self.assertIn(f"For `hpa-utilization` it says {self.quoted(scrape)} against the cluster's {self.quoted(cluster)}", self.README)
+        def gaps(side):
+            seeds = [abs(r["cluster"]["goodput"] - r[side]["goodput"]) * 100 for ramp in self.RAMPS for r in self.rows(self.DOCS[ramp], "hpa-utilization")]
+            meds = [abs(a - b) for a, b in zip(self.series("hpa-utilization", side), cluster)]
+            return max(seeds), max(meds)
+        self.assertLess(gaps("simulation_scrape"), gaps("simulation_lag"))
+        self.assertIn(f"within {gaps('simulation_scrape')[0]:.1f} points on every seed and {gaps('simulation_scrape')[1]:.1f} on the medians, "
+                      f"where the fixed lag is within {gaps('simulation_lag')[0]:.1f} and {gaps('simulation_lag')[1]:.1f}", self.README)
+
+    def test_concurrency_sits_above_the_cluster_on_every_ramp_and_the_fixed_lag_is_closer_on_every_one(self):
+        scrape, lag, cluster = (self.series("hpa-concurrency", side) for side in ("simulation_scrape", "simulation_lag", "cluster"))
+        self.assertTrue(all(s > c for s, c in zip(scrape, cluster)))
+        self.assertIn(f"For `hpa-concurrency` it says {self.quoted(scrape)}, above the cluster on every ramp", self.README)
+        seeds = lambda side: max(abs(r["cluster"]["goodput"] - r[side]["goodput"]) * 100 for ramp in self.RAMPS for r in self.rows(self.DOCS[ramp], "hpa-concurrency"))
+        self.assertIn(f"within {seeds('simulation_scrape'):.1f} points on every seed, where the fixed lag is within {seeds('simulation_lag'):.1f} "
+                      "and closer on every ramp's median", self.README)
+        for i, ramp in enumerate(self.RAMPS):
+            with self.subTest(ramp=ramp):
+                self.assertLess(abs(lag[i] - cluster[i]), abs(scrape[i] - cluster[i]))
