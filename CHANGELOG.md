@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.0] - 2026-11-08
+
+The ramps on the real cluster, and what is left of the utilization tail. On the cluster a ten-minute ramp is not slow
+enough, as the lagged model said; the signal that wins depends on the ramp there too; and most of `hpa-utilization`'s
+tail is the lag paid at every capped step.
 
 ### Added
 - `results/cluster-ramps`: the 120 s and 600 s ramps on the kind cluster, three seeds each, with `static-24`,
