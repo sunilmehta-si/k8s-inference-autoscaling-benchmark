@@ -71,8 +71,9 @@ proven by the change that could break it.
 `iab compare DIR --workload workloads/burst.json --out results/cluster` runs the simulation for each cluster run's policy,
 seed and settings and writes the two side by side: median and range per metric, the difference, and a run-by-run table.
 
-The ramps run the same way with `-f workload=ramp-120` or `-f workload=ramp-600` and `-f 'policies=["static-24","hpa-concurrency","hpa-utilization"]'`,
-and compare into `results/cluster-ramps/ramp-120` and `results/cluster-ramps/ramp-600` with the matching workload file.
+The ramps run the same way with `-f workload=ramp-30`, `ramp-120`, `ramp-300` or `ramp-600` and
+`-f 'policies=["static-24","hpa-concurrency","hpa-utilization"]'`, and compare into `results/cluster-ramps/ramp-R` with the
+matching workload file.
 
 ## Not reproducible to the digit
 
