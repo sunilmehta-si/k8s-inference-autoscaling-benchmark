@@ -8,8 +8,10 @@
 Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA; startup
 (seconds before a new pod is ready), min (the fewest pods, the standing headroom) and sync (seconds between the
 autoscaler's decisions) for any policy, route (`central`, the default: one shared queue; `pod`: each request is
-sent to a random ready pod when it arrives and waits in that pod's own queue, as behind a Kubernetes Service), and lag
-(seconds: the autoscaler acts on the signal as it was that long ago, as when it reads it through Prometheus).
+sent to a random ready pod when it arrives and waits in that pod's own queue, as behind a Kubernetes Service), lag
+(seconds: the autoscaler acts on the signal as it was that long ago, as when it reads it through Prometheus) and scrape
+(seconds: each pod is scraped at that interval at its own offset, a rule evaluated at that interval at its own offset
+sums the latest samples, and the autoscaler reads the latest evaluation; not combined with lag).
 """
 from __future__ import annotations
 
@@ -33,6 +35,7 @@ class Spec:
     sync_s: float = SYNC_PERIOD_S
     pod_queues: bool = False
     metrics_lag_s: float = 0.0
+    scrape_s: float = 0.0
 
 
 def parse(text: str, base: Replica = Replica()) -> Spec:
@@ -66,25 +69,32 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
         lag = _number(float, "lag", params.pop("lag"))
         if lag < 0:
             raise ValueError("lag cannot be negative")
+    scrape = 0.0
+    if "scrape" in params:
+        scrape = _number(float, "scrape", params.pop("scrape"))
+        if scrape <= 0:
+            raise ValueError("scrape must be positive")
+        if lag:
+            raise ValueError("set lag or scrape, not both")
     if "startup" in params:
         replica = replace(base, startup_s=_number(float, "startup", params.pop("startup")))
     label = label or (body if options else kind)
     if kind.startswith("static-"):
         if params:
-            raise ValueError(f"a static pool takes no options besides startup, min, sync, route and lag, not {', '.join(params)}")
+            raise ValueError(f"a static pool takes no options besides startup, min, sync, route, lag and scrape, not {', '.join(params)}")
         size = _number(int, "pool size", kind[len("static-"):])
         if size < 1:
             raise ValueError("a static pool needs at least one pod")
-        return Spec(label, text, lambda: Static(size), replica, minimum, sync, pod_queues, lag)
+        return Spec(label, text, lambda: Static(size), replica, minimum, sync, pod_queues, lag, scrape)
     signal = kind[len("hpa-"):] if kind.startswith("hpa-") else ""
     if signal not in SIGNALS:
         raise ValueError(f"unknown policy {kind!r}: use static-N or hpa-<{'|'.join(SIGNALS)}>")
     arguments = {}
     for key, value in params.items():
         if key not in HPA_KEYS:
-            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min, sync, route, lag")
+            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min, sync, route, lag, scrape")
         arguments[HPA_ARGUMENT.get(key, key)] = _number(HPA_KEYS[key], key, value)
-    return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica, minimum, sync, pod_queues, lag)
+    return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica, minimum, sync, pod_queues, lag, scrape)
 
 
 def with_route(text: str, route: str) -> str:

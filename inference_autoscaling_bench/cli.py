@@ -27,7 +27,7 @@ def cmd_policies(args) -> int:
     print("static-N                a fixed pool of N pods")
     for name, (_, target) in SIGNALS.items():
         print(f"{'hpa-' + name:<24}the HPA on {name}, default target {target:g} per pod")
-    print("\nA spec is [label=]policy[:key=value,...]. Keys: target, down, up_window, tolerance, up_pods, up_percent, startup, min, sync, route, lag.")
+    print("\nA spec is [label=]policy[:key=value,...]. Keys: target, down, up_window, tolerance, up_pods, up_percent, startup, min, sync, route, lag, scrape.")
     return 0
 
 
@@ -50,7 +50,7 @@ def cmd_run(args) -> int:
     for spec in _specs(args.policy):
         own = bounds if spec.min_replicas is None else Bounds(spec.min_replicas, bounds.max_replicas)
         summary = summarize(simulate(trace, w, spec.make(), spec.replica, own, spec.sync_s, spec.pod_queues, args.seed,
-                                      spec.metrics_lag_s), w)
+                                      spec.metrics_lag_s, spec.scrape_s), w)
         print(f"{spec.label}: " + ", ".join(f"{key} {fmt(summary[key])}" for key, _, fmt, _ in report.METRICS))
     return 0
 
@@ -96,6 +96,15 @@ def cmd_compare(args) -> int:
     doc = compare.build(args.title or f"The cluster against the simulation: {w.name}", w, compare.load_cluster_runs(args.cluster))
     compare.write(args.out, doc)
     print(f"{len(doc['rows'])} cluster runs compared with the simulation -> {args.out}")
+    return 0
+
+
+def cmd_recompare(args) -> int:
+    doc = compare.read(args.directory)
+    w = workloads.load(args.workload)
+    doc = compare.rebuild(doc, w)
+    compare.write(args.directory, doc)
+    print(f"{len(doc['rows'])} cluster runs compared with the simulation again -> {args.directory}")
     return 0
 
 
@@ -159,6 +168,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--title")
     p.set_defaults(func=cmd_compare)
+
+    p = sub.add_parser("recompare", help="run the models again for a comparison's cluster runs, after the model changed")
+    p.add_argument("directory", help="a directory iab compare wrote")
+    p.add_argument("--workload", required=True)
+    p.set_defaults(func=cmd_recompare)
 
     p = sub.add_parser("report", help="render README.md and chart.svg again from a dataset's runs.json")
     p.add_argument("directory")

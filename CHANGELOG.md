@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- `scrape=S`, a model of the metrics pipeline piece by piece: each pod is scraped every S seconds at its own offset, a
+  rule evaluated every S seconds at its own offset sums the latest sample of every pod, and the autoscaler reads the
+  latest evaluation, so each pod's sample has its own age (0 to 2S) and a new pod's first sample arrives within S. It
+  is not combined with `lag`. `iab compare` runs it as a fourth model (`scrape=15`, with a queue per pod) and the five
+  committed comparisons carry its column; `iab recompare DIR --workload W` runs the models again for a committed
+  comparison without the cluster's raw runs. On the ramps the sampled pipeline places the utilization flip and
+  utilization's lead at 600 s where the cluster does, on every seed, and is within 11.9 points of the cluster for
+  `hpa-utilization` on every seed (the fixed lag: 21.9); for `hpa-concurrency` it sits above the cluster on every ramp,
+  where the fixed lag is closer. The README's ramp and cluster sections say so, and tests hold every number.
 - `results/cluster-ramps` now holds all four ramps on the cluster (30 s and 300 s added), three seeds each. On the
   cluster no ramp is slow enough: `hpa-concurrency` serves 73.5%, 82.9%, 89.9% and 89.8%, below the one-queue model in
   every run, and its gain from a longer ramp stops at 300 s. The lagged model is within 5.6 points on every seed of

@@ -125,3 +125,27 @@ class LagTests(unittest.TestCase):
         w = workload.load(Path(__file__).resolve().parent.parent / "workloads/burst.json")
         rows, _ = experiment.run_matrix(w, [spec.parse("a=hpa-concurrency"), spec.parse("b=hpa-concurrency:lag=30")], [1])
         self.assertNotEqual(rows[0]["goodput"], rows[1]["goodput"])
+
+
+class ScrapeOptionTests(unittest.TestCase):
+    def test_scrape_is_parsed_for_an_hpa_and_a_static_pool(self):
+        self.assertEqual(spec.parse("hpa-queue:scrape=15").scrape_s, 15.0)
+        self.assertEqual(spec.parse("static-4:route=pod,scrape=15").scrape_s, 15.0)
+
+    def test_no_scraping_is_the_default(self):
+        self.assertEqual(spec.parse("hpa-queue").scrape_s, 0.0)
+        self.assertEqual(spec.parse("hpa-queue:lag=30").scrape_s, 0.0)
+
+    def test_a_non_positive_or_non_numeric_interval_is_refused(self):
+        for text in ("hpa-queue:scrape=0", "hpa-queue:scrape=-5", "hpa-queue:scrape=often"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                spec.parse(text)
+
+    def test_lag_and_scrape_together_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "not both"):
+            spec.parse("hpa-queue:lag=30,scrape=15")
+
+    def test_the_matrix_passes_the_interval_to_the_simulation(self):
+        w = workload.load(Path(__file__).resolve().parent.parent / "workloads/burst.json")
+        rows, _ = experiment.run_matrix(w, [spec.parse("a=hpa-concurrency:route=pod"), spec.parse("b=hpa-concurrency:route=pod,scrape=15")], [1])
+        self.assertNotEqual(rows[0]["ttft_p95_ms"], rows[1]["ttft_p95_ms"])

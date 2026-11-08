@@ -71,9 +71,11 @@ far one signal moves when its target does.
 - **Slowdowns are measured at the start of a request.** A real batch changes as requests arrive and leave. The error
   is the same for every policy.
 - **There is no router, prefix cache or network, and by default no metrics delay.** The autoscaler sees the exact
-  state at each sync unless a spec sets `lag`. A real metrics pipeline adds a scrape interval and usually more, which
-  makes every policy in the seven datasets look better than it would be; on the cluster, `lag=30` with a queue per pod
-  brings the HPA policies' goodput within 3.2 points of the real thing (the README's cluster stage).
+  state at each sync unless a spec sets `lag` (one fixed age) or `scrape` (each pod scraped at its own offset, a rule
+  evaluated at its own offset, the autoscaler reading the latest evaluation). A real metrics pipeline adds a scrape
+  interval and usually more, which makes every policy in the seven datasets look better than it would be; on the
+  cluster, `lag=30` with a queue per pod brings the HPA policies' goodput within 3.2 points of the real thing, and
+  `scrape=15` places the ramps' utilization flip where the cluster does (the README's cluster stage).
 - **There is no KEDA, Knative or predictive scaling.** They are different controllers around the same signals. The
   HPA is modelled because it is what most clusters run.
 - **One workload.** A different trace changes the numbers, and a gentler ramp changes the conclusions.

@@ -133,6 +133,15 @@ checked against the real autoscaler at every ramp.
   from 300 s; the lagged model puts it behind at 300 s and level at 600 s (91.1% each), so it places the flip where the
   cluster does but misses utilization's lead at 600 s by 2.4–4.1 points. The lagged model is below the cluster for
   `hpa-utilization` on every seed of every ramp, by 2.4 to 21.9 points, so a fixed 30 s lag charges utilization too much.
+- **The sampled pipeline places the flip, and utilization's lead, where the cluster does.** With each pod's sample given
+  its own age (`scrape=15`, the fourth model of the cluster stage below), `hpa-utilization` is below `hpa-concurrency` on
+  the 30 s, 120 s and 300 s ramps and above it on the 600 s ramp (94.7% against 91.6%, with a shorter tail, 2.1 s against
+  3.2 s at the 95th percentile), on every seed, as on the cluster. For `hpa-utilization` it says 43.8%, 54.2%, 82.4% and
+  94.7% against the cluster's 42.8%, 50.5%, 76.8% and 94.2%, within 11.9 points on every seed and 5.5 on the medians,
+  where the fixed lag is within 21.9 and 8.6. For `hpa-concurrency` it says 77.4%, 86.7%, 91.1% and 91.6%, above the
+  cluster on every ramp and within 5.3 points on every seed, where the fixed lag is within 5.6 and closer on every
+  ramp's median. So the worst case of the pipeline fits requests in the system, and the pipeline itself fits busy
+  slots, whose capped steps pay the lag several times over; some delay on the cluster is in neither model.
 - **Headroom still wins outright.** `static-24` serves 99.4–99.6% on every ramp on the cluster, as in every model.
 
 ## The cluster stage
@@ -172,7 +181,15 @@ twelve 30-minute runs. What it shows, and what it does not:
   cluster) and of `hpa-concurrency` by 9 s. Goodput still fits 30 s better, so no one fixed lag fits the cluster, likely
   because Prometheus scrapes each pod at its own offset within the 15 s and the controller averages samples of different
   ages. Most of the gap is one seed: on seed 1 the queue peaked at 1,756 requests on the cluster against 1,313 in the
-  model, 78 s more at the 95th percentile; seeds 2 and 3 are within 31 s.
+  model, 78 s more at the 95th percentile; seeds 2 and 3 are within 31 s. The next bullet tests the offsets.
+- **A fourth model gives each pod's sample its own age.** With `scrape=15` the pipeline is modelled piece by piece: each
+  pod is scraped every 15 s at its own offset, as Prometheus spreads its targets; a rule evaluated every 15 s at its own
+  offset sums the latest sample of every pod; and the autoscaler reads the latest evaluation. The signal it acts on is
+  then between 0 and 30 s old rather than 30 s old every time, and a new pod's first sample arrives within 15 s. On the
+  burst it moves the median goodput of `hpa-utilization` from 38.3% to 46.4% against 40.9% on the cluster, and its tail
+  from 131 s to 140 s against 165 s; `hpa-queue` from 73.5% to 71.7% against 70.3%; `hpa-concurrency` from 75.1% to
+  77.4% against 76.4%. Its largest median gap on the burst is 5.5 points against the fixed lag's 3.2, so the burst alone
+  does not choose between the two models; the ramps do (the section above).
 - **A queue per pod also gives the cluster's ranking of the signals.** With one shared queue the simulation puts
   `hpa-utilization` second (72.3%) and `hpa-queue` last (64.3%). With a queue per pod it puts `hpa-queue` second (79.9%)
   and `hpa-utilization` last (56.2%), as on the cluster (70.3% and 40.9%), and `hpa-utilization` has a median peak of 26 pods, as
@@ -187,9 +204,9 @@ longer clearly beat queue depth, standing headroom helps half as much, and a sho
 
 The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, a model
 with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points, four ramps that show
-where reactive scaling is enough, and all four ramps on the cluster are built. Not yet built:
-a model in which each pod's sample has its own age, which the tail of `hpa-utilization` and its goodput on the ramps point to; KEDA
-reading the same signals; and a predictive policy.
+where reactive scaling is enough, all four ramps on the cluster, and a model in which each pod's sample has its own age,
+which places the ramps' utilization flip where the cluster does, are built. Not yet built: KEDA reading the same
+signals; and a predictive policy.
 
 ## Related projects
 

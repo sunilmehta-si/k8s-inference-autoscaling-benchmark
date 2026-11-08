@@ -17,6 +17,11 @@ What is modelled, and where it is a simplification (docs/methodology.md says why
   With `metrics_lag_s` it sees the signal (requests running and waiting, and the arrival rate) as it was at the latest
   sync at least that many seconds earlier, the way an HPA reads a value Prometheus scraped and a recording rule
   evaluated a while ago; the pod counts stay current, so pods that became ready since count as having no load yet.
+  With `scrape_s` the pipeline is modelled piece by piece instead of as one fixed lag: each pod is scraped every
+  `scrape_s` seconds at its own offset within the interval, as Prometheus spreads its targets; a recording rule is
+  evaluated every `scrape_s` seconds at its own offset and sums the latest sample of every pod; and the autoscaler
+  reads the latest evaluation at each sync. Each pod's sample then has its own age, from nothing to two intervals, and
+  a pod's first sample after it is created arrives within one interval. The two options are not combined.
 """
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ from .workload import Request, Workload
 SYNC_PERIOD_S = 15.0
 RATE_WINDOW_S = 30.0
 
-_DONE, _READY, _ARRIVAL, _TICK = 0, 1, 2, 3  # the order events at the same instant are handled in
+_DONE, _READY, _ARRIVAL, _SCRAPE, _RULE, _TICK = 0, 1, 2, 3, 4, 5  # the order events at the same instant are handled in
 
 
 @dataclass(frozen=True)
@@ -49,13 +54,14 @@ class Replica:
 
 
 class _Pod:
-    __slots__ = ("id", "born", "ready_at", "state", "running", "died", "waiting")
+    __slots__ = ("id", "born", "ready_at", "state", "running", "died", "waiting", "sample")
 
     def __init__(self, ident: int, born: float, ready_at: float, state: str):
         self.id, self.born, self.ready_at, self.state = ident, born, ready_at, state
         self.running = 0
         self.waiting: deque[int] = deque()   # only used with pod_queues
         self.died: float | None = None
+        self.sample = (0, 0)                 # (running, waiting) at the pod's latest scrape; only used with scrape_s
 
 
 @dataclass
@@ -76,9 +82,13 @@ class Run:
 
 def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: Replica = Replica(),
              bounds: Bounds = Bounds(), sync_period_s: float = SYNC_PERIOD_S, pod_queues: bool = False,
-             route_seed: int = 0, metrics_lag_s: float = 0.0) -> Run:
+             route_seed: int = 0, metrics_lag_s: float = 0.0, scrape_s: float = 0.0) -> Run:
     if metrics_lag_s < 0:
         raise ValueError("the metrics lag cannot be negative")
+    if scrape_s < 0:
+        raise ValueError("the scrape interval cannot be negative")
+    if metrics_lag_s and scrape_s:
+        raise ValueError("set a metrics lag or a scrape interval, not both")
     n = len(trace)
     duration = workload.duration_s
     wait, ttft, latency = [0.0] * n, [0.0] * n, [0.0] * n
@@ -88,6 +98,9 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
     counter = 0
     state = {"running": 0, "live": 0, "peak": 0, "max_queue": 0, "waiting": 0}
     rng = random.Random(route_seed)
+    offsets = random.Random(f"scrape-{route_seed}")   # its own stream, so the routing draws are the same with or without scraping
+    rule_offset = offsets.uniform(0.0, scrape_s) if scrape_s else 0.0
+    recorded = (0, 0, 0.0)                            # (running, waiting, arrival rate) at the latest rule evaluation
 
     def queued() -> int:
         return len(queue) + state["waiting"]
@@ -108,6 +121,9 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
         state["peak"] = max(state["peak"], state["live"])
         if pod_state == "pending":
             push(ready_at, _READY, pod)
+        if scrape_s:
+            offset = offsets.uniform(0.0, scrape_s)
+            push(now + (offset - now) % scrape_s, _SCRAPE, pod)
 
     def retire(pod: _Pod, now: float) -> None:
         pod.state, pod.died = "gone", now
@@ -149,6 +165,12 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
     def idle(pod: _Pod) -> bool:
         return pod.running == 0 and not pod.waiting
 
+    def arrival_rate(now: float) -> float:
+        while arrivals and arrivals[0] <= now - RATE_WINDOW_S:
+            arrivals.popleft()
+        window = min(now, RATE_WINDOW_S)
+        return len(arrivals) / window if window > 0 else 0.0
+
     for _ in range(policy.initial(bounds)):
         add_pod(0.0, 0.0, "ready")
     for req in trace:
@@ -158,6 +180,11 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
         push(tick, _TICK, None)
         tick += sync_period_s
     push(0.0, _TICK, None)
+    if scrape_s:
+        rule = rule_offset
+        while rule <= duration:
+            push(rule, _RULE, None)
+            rule += scrape_s
 
     while heap:
         now, kind, _, payload = heapq.heappop(heap)
@@ -177,17 +204,26 @@ def simulate(trace: list[Request], workload: Workload, policy: Policy, replica: 
             arrivals.append(now)
             state["max_queue"] = max(state["max_queue"], queued())
             dispatch(now)
+        elif kind == _SCRAPE:
+            if payload.state != "gone" and now <= duration:   # a pod is scraped from creation, ready or not, until it is gone
+                payload.sample = (payload.running, len(payload.waiting))
+                push(now + scrape_s, _SCRAPE, payload)
+        elif kind == _RULE:
+            # The rule sums the latest sample of every pod that exists. Requests in a shared queue belong to no pod, so
+            # with one shared queue they are read here, at the evaluation.
+            live = [p for p in pods if p.state != "gone"]
+            recorded = (sum(p.sample[0] for p in live), sum(p.sample[1] for p in live) + len(queue), arrival_rate(now))
         else:
             ready = [p for p in pods if p.state == "ready"]
             pending = [p for p in pods if p.state == "pending"]
             timeline.append((now, len(ready), len(pending), state["running"], queued()))
-            while arrivals and arrivals[0] <= now - RATE_WINDOW_S:
-                arrivals.popleft()
-            window = min(now, RATE_WINDOW_S)
-            seen.append((now, state["running"], queued(), len(arrivals) / window if window > 0 else 0.0))
+            seen.append((now, state["running"], queued(), arrival_rate(now)))
             if now == 0.0:
                 continue  # the autoscaler's first sync is one period after the start
-            _, running, waiting, rate = _as_of(seen, now - metrics_lag_s)
+            if scrape_s:
+                running, waiting, rate = recorded
+            else:
+                _, running, waiting, rate = _as_of(seen, now - metrics_lag_s)
             obs = Observation(now, len(ready), len(pending), running, waiting, replica.slots, rate)
             desired = policy.decide(obs, bounds)
             if desired is None:

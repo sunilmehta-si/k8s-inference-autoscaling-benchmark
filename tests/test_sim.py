@@ -232,3 +232,55 @@ class MetricsLagTests(unittest.TestCase):
     def test_a_negative_lag_is_refused(self):
         with self.assertRaisesRegex(ValueError, "negative"):
             sim.simulate(trace(*self.ROWS), tiny_workload(90), Static(1), sim.Replica(), ONE, metrics_lag_s=-1)
+
+
+class ScrapeTests(unittest.TestCase):
+    """With scrape_s each pod is scraped at its own offset, a rule at its own offset sums the samples, and the autoscaler
+    reads the latest evaluation. The offsets come from a stream seeded by the route seed, so a run is deterministic."""
+
+    ROWS = MetricsLagTests.ROWS   # six long requests arrive at 20 s
+
+    def seen(self, scrape, pods=2):
+        policy = Recorder(pods)
+        sim.simulate(trace(*self.ROWS), tiny_workload(90), policy, sim.Replica(), ONE, scrape_s=scrape)
+        return {t: load for t, _, load in policy.seen}
+
+    def test_the_offsets_are_drawn_from_their_own_seeded_stream(self):
+        import random
+        draws = random.Random("scrape-0")
+        rule, pod0, pod1 = (draws.uniform(0.0, 15.0) for _ in range(3))
+        # route seed 0: the rule runs at 4.68 s past each 15 s, pod 0 is scraped at 1.73 s past and pod 1 at 10.64 s past.
+        self.assertEqual([round(x, 2) for x in (rule, pod0, pod1)], [4.68, 1.73, 10.64])
+        # The load arrives at 20 s. Pod 1 is scraped at 25.6 s and pod 0 at 31.7 s; the rule at 34.7 s is the first to
+        # sum both, so the sync at 30 s still sees 0 and the one at 45 s sees all six.
+        seen = self.seen(15)
+        self.assertEqual((seen[15.0], seen[30.0], seen[45.0]), (0, 0, 6))
+
+    def test_a_tiny_interval_is_as_good_as_no_lag(self):
+        self.assertEqual((self.seen(0.001)[15.0], self.seen(0.001)[30.0]), (0, 6))
+
+    def test_pod_counts_are_not_sampled(self):
+        policy = Recorder(3)
+        sim.simulate(trace(*self.ROWS), tiny_workload(90), policy, sim.Replica(), ONE, scrape_s=15)
+        self.assertTrue(all(ready == 3 for _, ready, _ in policy.seen))
+
+    def test_the_routing_draws_are_the_same_with_and_without_scraping(self):
+        burst = workload.load(ROOT / "workloads/burst.json")
+        reqs = workload.generate(burst, 1)
+        a = sim.simulate(reqs, burst, Static(24), sim.Replica(), Bounds(), pod_queues=True, route_seed=1)
+        b = sim.simulate(reqs, burst, Static(24), sim.Replica(), Bounds(), pod_queues=True, route_seed=1, scrape_s=15)
+        self.assertEqual(a.ttft, b.ttft)   # a static pool reads no metric, so only the routing could differ, and it does not
+
+    def test_the_first_scale_up_on_a_burst_is_between_no_lag_and_the_fixed_lag(self):
+        burst = workload.load(ROOT / "workloads/burst.json")
+        reqs = workload.generate(burst, 1)
+        first = lambda **kw: sim.simulate(reqs, burst, Hpa("concurrency"), sim.Replica(), Bounds(), pod_queues=True,
+                                          route_seed=1, **kw).events[0][0]
+        self.assertLessEqual(first(), first(scrape_s=15))
+        self.assertLess(first(scrape_s=15), first(metrics_lag_s=30))
+
+    def test_a_negative_interval_or_both_options_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "negative"):
+            sim.simulate(trace(*self.ROWS), tiny_workload(90), Static(1), sim.Replica(), ONE, scrape_s=-1)
+        with self.assertRaisesRegex(ValueError, "not both"):
+            sim.simulate(trace(*self.ROWS), tiny_workload(90), Static(1), sim.Replica(), ONE, metrics_lag_s=30, scrape_s=15)
