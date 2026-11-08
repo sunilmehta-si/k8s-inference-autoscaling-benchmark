@@ -354,6 +354,49 @@ class MetricsLagClaimTests(unittest.TestCase):
         self.assertIn(f"remaining {gap:.0f} ms", self.README)
 
 
+class UtilizationTailTests(unittest.TestCase):
+    """The README's utilization-tail bullet, number by number."""
+
+    DOC = results.read(ROOT / "results" / "cluster")
+    README = " ".join((ROOT / "README.md").read_text().split())
+
+    def rows(self, policy):
+        return [r for r in self.DOC["rows"] if r["policy"] == policy]
+
+    def model_p95(self, policy, lag):
+        from inference_autoscaling_bench import compare
+        burst = workload.load(ROOT / "workloads/burst.json")
+        return statistics.median(
+            compare.simulate_like({"config": r["config"], "summary": {"policy": policy, "seed": r["seed"]}}, burst,
+                                  pod_queues=True, lag_s=lag)["ttft_p95_ms"] for r in self.rows(policy)) / 1000
+
+    def test_utilization_caps_a_step_and_concurrency_does_not(self):
+        from inference_autoscaling_bench.policies import Hpa, Observation
+        flooded = Observation(now=0.0, ready=10, pending=0, running=80, queued=10_000, slots=8, arrival_rate=50.0)
+        utilization = Hpa("utilization").decide(flooded, Bounds(2, 32))
+        self.assertEqual(utilization, 17)   # ceil(10 / 0.6): every slot busy is the most the signal can say
+        self.assertGreater(Hpa("concurrency").decide(flooded, Bounds(2, 32)), utilization)
+
+    def test_15_seconds_more_lag_costs_utilization_four_times_what_it_costs_concurrency(self):
+        util = (self.model_p95("hpa-utilization", 30), self.model_p95("hpa-utilization", 45))
+        conc = (self.model_p95("hpa-concurrency", 30), self.model_p95("hpa-concurrency", 45))
+        self.assertEqual((round(util[1] - util[0]), round(conc[1] - conc[0])), (36, 9))
+        self.assertGreater(util[1] - util[0], 3.9 * (conc[1] - conc[0]))
+        cluster = statistics.median(r["cluster"]["ttft_p95_ms"] for r in self.rows("hpa-utilization")) / 1000
+        self.assertLess(abs(cluster - util[1]), abs(cluster - util[0]))   # the tail sits at 45 s
+        self.assertIn(f"by 36 s ({round(util[0])} s to {round(util[1])} s, against {round(cluster)} s on the cluster)"
+                      f" and of `hpa-concurrency` by 9 s", self.README)
+
+    def test_most_of_the_gap_is_one_seed(self):
+        rows = {r["seed"]: r for r in self.rows("hpa-utilization")}
+        gap = {s: round((r["cluster"]["ttft_p95_ms"] - r["simulation_lag"]["ttft_p95_ms"]) / 1000) for s, r in rows.items()}
+        self.assertEqual(gap[1], 78)
+        self.assertEqual(max(gap[2], gap[3]), 31)
+        self.assertEqual((rows[1]["cluster"]["max_queue"], rows[1]["simulation_lag"]["max_queue"]), (1756, 1313))
+        self.assertIn("the queue peaked at 1,756 requests on the cluster against 1,313 in the model, 78 s more", self.README)
+        self.assertIn("seeds 2 and 3 are within 31 s", self.README)
+
+
 class RampTests(unittest.TestCase):
     """results/ramps: the same deployment on four ramps; the README's ramp section, claim by claim."""
 
