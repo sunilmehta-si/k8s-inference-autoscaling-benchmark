@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `results/cluster-ramps` now holds all four ramps on the cluster (30 s and 300 s added), three seeds each. On the
+  cluster no ramp is slow enough: `hpa-concurrency` serves 73.5%, 82.9%, 89.9% and 89.8%, below the one-queue model in
+  every run, and its gain from a longer ramp stops at 300 s. The lagged model is within 5.6 points on every seed of
+  every ramp and places the utilization flip where the cluster does (between 300 s and 600 s), where the one-queue
+  model puts it at 300 s; it is below the cluster for `hpa-utilization` on every seed of every ramp. The README's ramp
+  section and status say so, and tests hold every number.
+
 ## [0.5.0] - 2026-11-08
 
 The ramps on the real cluster, and what is left of the utilization tail. On the cluster a ten-minute ramp is not slow

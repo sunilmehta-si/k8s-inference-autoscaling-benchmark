@@ -398,9 +398,10 @@ class UtilizationTailTests(unittest.TestCase):
 
 
 class ClusterRampTests(unittest.TestCase):
-    """results/cluster-ramps: the 120 s and 600 s ramps on the cluster; the README's cluster-ramp bullets, number by number."""
+    """results/cluster-ramps: the four ramps on the cluster; the README's cluster-ramp bullets, number by number."""
 
-    DOCS = {r: results.read(ROOT / "results" / "cluster-ramps" / f"ramp-{r}") for r in (120, 600)}
+    RAMPS = (30, 120, 300, 600)
+    DOCS = {r: results.read(ROOT / "results" / "cluster-ramps" / f"ramp-{r}") for r in RAMPS}
     README = " ".join((ROOT / "README.md").read_text().split())
     POLICIES = ("hpa-concurrency", "hpa-utilization", "static-24")
 
@@ -409,6 +410,13 @@ class ClusterRampTests(unittest.TestCase):
 
     def med(self, ramp, policy, side, key="goodput"):
         return statistics.median(r[side][key] for r in self.rows(ramp, policy))
+
+    def series(self, policy, side):
+        return [self.med(r, policy, side) * 100 for r in self.RAMPS]
+
+    @staticmethod
+    def quoted(values):
+        return ", ".join(f"{v:.1f}%" for v in values[:-1]) + f" and {values[-1]:.1f}%"
 
     def test_three_seeds_of_three_policies_on_each_ramp_and_the_readmes_regenerate(self):
         from inference_autoscaling_bench import compare
@@ -419,49 +427,60 @@ class ClusterRampTests(unittest.TestCase):
                                  sorted((p, s) for p in self.POLICIES for s in (1, 2, 3)))
                 self.assertEqual((ROOT / "results" / "cluster-ramps" / f"ramp-{ramp}" / "README.md").read_text(), compare.markdown(doc))
 
-    def test_a_ten_minute_ramp_is_not_slow_enough_on_the_cluster_and_the_lagged_model_said_so(self):
-        c, one, lag = (self.med(600, "hpa-concurrency", side) * 100 for side in ("cluster", "simulation", "simulation_lag"))
-        self.assertLess(c, 93)
-        self.assertGreater(one, 99)
-        self.assertIn(f"serves {c:.1f}% of requests in time on the 600 s ramp", self.README)
-        self.assertIn(f"against {one:.1f}% in the one-queue model and {lag:.1f}% in the model", self.README)
-        seeds = [r["cluster"]["goodput"] * 100 for r in self.rows(600, "hpa-concurrency")]
-        self.assertIn(f"({min(seeds):.1f}–{max(seeds):.1f}% over the seeds)", self.README)
-        for ramp, quoted in ((600, 1.3), (120, 4.9)):
-            gaps = [abs(r["cluster"]["goodput"] - r["simulation_lag"]["goodput"]) * 100 for r in self.rows(ramp, "hpa-concurrency")]
-            with self.subTest(ramp=ramp):
-                self.assertLessEqual(max(gaps), quoted + 0.05)
-                self.assertGreater(max(gaps), quoted - 0.1)   # the quoted figure is the largest gap, not a loose bound
-        c120, lag120 = (self.med(120, "hpa-concurrency", side) * 100 for side in ("cluster", "simulation_lag"))
-        self.assertIn(f"On the 120 s ramp the cluster serves {c120:.1f}%, the lagged model {lag120:.1f}%, within 4.9 points on every seed", self.README)
+    def test_no_ramp_is_slow_enough_on_the_cluster_and_the_lagged_model_said_so(self):
+        cluster, one, lag = (self.series("hpa-concurrency", side) for side in ("cluster", "simulation", "simulation_lag"))
+        self.assertIn(f"`hpa-concurrency` serves {self.quoted(cluster)} of requests in time on the four ramps", self.README)
+        self.assertIn(f"below the one-queue model ({', '.join(f'{v:.1f}%' for v in one)}) in every run", self.README)
+        self.assertIn(f"the 30 s lag says {self.quoted(lag)}", self.README)
+        best = max(r["cluster"]["goodput"] * 100 for ramp in self.RAMPS for r in self.rows(ramp, "hpa-concurrency"))
+        self.assertIn(f"no run serves more than {best:.1f}%", self.README)
+        gaps, med_gaps = [], []
+        for ramp in self.RAMPS:
+            rows = self.rows(ramp, "hpa-concurrency")
+            for r in rows:
+                with self.subTest(ramp=ramp, seed=r["seed"]):
+                    self.assertLess(r["cluster"]["goodput"], min(x["simulation"]["goodput"] for x in rows))
+                gaps.append(abs(r["cluster"]["goodput"] - r["simulation_lag"]["goodput"]) * 100)
+            med_gaps.append(abs(self.med(ramp, "hpa-concurrency", "cluster") - self.med(ramp, "hpa-concurrency", "simulation_lag")) * 100)
+        self.assertIn(f"within {max(gaps):.1f} points of the cluster on every seed of every ramp and within {max(med_gaps):.1f} points on the medians", self.README)
 
-    def test_the_best_signal_depends_on_the_ramp_on_the_cluster_too(self):
-        for ramp, utilization_wins in ((600, True), (120, False)):
+    def test_the_clusters_gain_from_a_longer_ramp_stops_at_300_s(self):
+        cluster, one, lag = (self.series("hpa-concurrency", side) for side in ("cluster", "simulation", "simulation_lag"))
+        self.assertLess(abs(cluster[3] - cluster[2]), 0.5)
+        self.assertGreater(one[3] - one[2], 4)
+        self.assertGreater(cluster[2] - cluster[1], 5)   # the gain up to 300 s is real
+        self.assertIn(f"moves from {cluster[2]:.1f}% to {cluster[3]:.1f}%, while the one-queue model moves from {one[2]:.1f}% to {one[3]:.1f}%; "
+                      f"the lagged model moves from {lag[2]:.1f}% to {lag[3]:.1f}%", self.README)
+
+    def test_the_best_signal_depends_on_the_ramp_and_the_flip_comes_later_than_the_one_queue_model_says(self):
+        for ramp in self.RAMPS:
             for u, c in zip(self.rows(ramp, "hpa-utilization"), self.rows(ramp, "hpa-concurrency")):
                 with self.subTest(ramp=ramp, seed=u["seed"]):
-                    self.assertEqual(u["cluster"]["goodput"] > c["cluster"]["goodput"], utilization_wins)
-        u600, c600 = self.med(600, "hpa-utilization", "cluster") * 100, self.med(600, "hpa-concurrency", "cluster") * 100
-        u120, c120 = self.med(120, "hpa-utilization", "cluster") * 100, self.med(120, "hpa-concurrency", "cluster") * 100
-        self.assertIn(f"`hpa-utilization` serves {u600:.1f}% against `hpa-concurrency`'s {c600:.1f}%", self.README)
-        self.assertIn(f"on the 120 s ramp it serves {u120:.1f}% against {c120:.1f}%", self.README)
+                    self.assertEqual(u["cluster"]["goodput"] > c["cluster"]["goodput"], ramp == 600)
+                    self.assertGreaterEqual(u["simulation"]["goodput"] >= c["simulation"]["goodput"], ramp >= 300)   # one queue: ahead from 300 s
+                    self.assertEqual(u["simulation_lag"]["goodput"] > c["simulation_lag"]["goodput"], False)        # lagged: never ahead
+        u, c = self.series("hpa-utilization", "cluster"), self.series("hpa-concurrency", "cluster")
+        self.assertIn(f"({u[0]:.1f}%, {u[1]:.1f}% and {u[2]:.1f}% against {c[0]:.1f}%, {c[1]:.1f}% and {c[2]:.1f}%)", self.README)
+        self.assertIn(f"above it on the 600 s ramp ({u[3]:.1f}% against {c[3]:.1f}%", self.README)
         tails = (self.med(600, "hpa-utilization", "cluster", "ttft_p95_ms") / 1000, self.med(600, "hpa-concurrency", "cluster", "ttft_p95_ms") / 1000)
         self.assertLess(tails[0], tails[1])
-        self.assertIn(f"({tails[0]:.1f} s against {tails[1]:.1f} s at the 95th percentile)", self.README)
-        shares = [u["cluster"]["replica_seconds"] / s["cluster"]["replica_seconds"] * 100
-                  for u, s in zip(self.rows(600, "hpa-utilization"), self.rows(600, "static-24"))]
+        self.assertIn(f"{tails[0]:.1f} s against {tails[1]:.1f} s at the 95th percentile", self.README)
+        shares = [x["cluster"]["replica_seconds"] / s["cluster"]["replica_seconds"] * 100
+                  for x, s in zip(self.rows(600, "hpa-utilization"), self.rows(600, "static-24"))]
         self.assertIn(f"at {min(shares):.0f}–{max(shares):.0f}% of `static-24`'s cost", self.README)
         lag_u, lag_c = self.med(600, "hpa-utilization", "simulation_lag") * 100, self.med(600, "hpa-concurrency", "simulation_lag") * 100
         self.assertEqual(round(lag_u, 1), round(lag_c, 1))
-        self.assertIn(f"The lagged model puts both signals at {lag_u:.1f}% on the 600 s ramp", self.README)
-        misses = [(r["cluster"]["goodput"] - r["simulation_lag"]["goodput"]) * 100 for r in self.rows(600, "hpa-utilization")]
-        self.assertGreater(min(misses), 0)   # the cluster is above the model on every seed
-        self.assertIn(f"misses utilization's lead there by {min(misses):.1f}–{max(misses):.1f} points", self.README)
+        self.assertIn(f"level at 600 s ({lag_u:.1f}% each)", self.README)
+        misses = [(r["cluster"]["goodput"] - r["simulation_lag"]["goodput"]) * 100 for ramp in self.RAMPS for r in self.rows(ramp, "hpa-utilization")]
+        self.assertGreater(min(misses), 0)   # the cluster is above the lagged model on every seed of every ramp
+        at_600 = misses[-3:]
+        self.assertIn(f"misses utilization's lead at 600 s by {min(at_600):.1f}–{max(at_600):.1f} points", self.README)
+        self.assertIn(f"by {min(misses):.1f} to {max(misses):.1f} points, so a fixed 30 s lag charges utilization too much", self.README)
 
-    def test_static_24_serves_the_same_share_on_both_ramps(self):
-        shares = {ramp: self.med(ramp, "static-24", "cluster") * 100 for ramp in (120, 600)}
-        self.assertEqual(round(shares[120], 1), round(shares[600], 1))
-        self.assertIn(f"`static-24` serves {shares[600]:.1f}% on both ramps on the cluster", self.README)
-        for ramp in (120, 600):
+    def test_static_24_serves_the_same_share_on_every_ramp(self):
+        shares = [self.med(r, "static-24", "cluster") * 100 for r in self.RAMPS]
+        self.assertIn(f"`static-24` serves {min(shares):.1f}–{max(shares):.1f}% on every ramp on the cluster", self.README)
+        for ramp in self.RAMPS:
             for side in ("simulation", "simulation_pods", "simulation_lag"):
                 self.assertGreater(self.med(ramp, "static-24", side), 0.99)
 
