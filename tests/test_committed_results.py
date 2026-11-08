@@ -606,7 +606,10 @@ class SampledPipelineTests(unittest.TestCase):
         burst = workload.load(ROOT / "workloads/burst.json")
         row = self.rows(self.BURST, "hpa-utilization")[0]
         run = {"config": row["config"], "summary": {"policy": "hpa-utilization", "seed": row["seed"]}}
-        self.assertEqual(row["simulation_scrape"], compare.simulate_like(run, burst, pod_queues=True, scrape_s=15))
+        got = compare.simulate_like(run, burst, pod_queues=True, scrape_s=15)
+        self.assertEqual(set(got), set(row["simulation_scrape"]))
+        for key, value in got.items():   # the last digit of a mean differs between Python versions
+            self.assertAlmostEqual(row["simulation_scrape"][key], value, delta=abs(value) * 1e-9 + 1e-9, msg=key)
 
     def test_the_burst_numbers_and_the_largest_median_gaps(self):
         g = lambda p, side: self.med(self.BURST, p, side) * 100
