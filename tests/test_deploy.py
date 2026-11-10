@@ -296,6 +296,29 @@ class AdapterExternalTests(unittest.TestCase):
         self.assertIn("verbs: [get, list]", text)
         self.assertNotRegex(text, r"(verbs|resources|apiGroups):\s*\[?\s*[\"']?\*")
 
+    def test_every_signal_has_an_external_hpa_with_the_hpas_target_bounds_and_window(self):
+        self.assertEqual(sorted(p.name for p in (DEPLOY / "hpa-external").glob("*.yaml")),
+                         sorted(p.name for p in (DEPLOY / "hpa").glob("*.yaml")))
+        for path in (DEPLOY / "hpa-external").glob("*.yaml"):
+            text, hpa = path.read_text(), (DEPLOY / "hpa" / path.name).read_text()
+            with self.subTest(file=path.name):
+                self.assertIn(f"metric: {{name: {path.stem}_sum}}", text)
+                self.assertIn("type: External", text)
+                self.assertEqual(re.search(r"averageValue: (\S+)\}", text).group(1), re.search(r"averageValue: (\S+)\}", hpa).group(1))
+                for line in ("minReplicas: ${MIN_REPLICAS}", "maxReplicas: ${MAX_REPLICAS}",
+                             "scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}"):
+                    self.assertIn(line, text)
+
+    def test_the_external_script_substitutes_what_its_manifests_use_with_the_hpas_defaults(self):
+        script = (SCRIPTS / "apply-external.sh").read_text()
+        used = set()
+        for path in (DEPLOY / "hpa-external").glob("*.yaml"):
+            used |= set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", path.read_text()))
+        self.assertEqual(used, set(re.findall(r"\$\{([A-Z_]+)\}", re.search(r"envsubst '([^']*)'", script).group(1))))
+        self.assertEqual(re.search(r"export (MIN_REPLICAS=.*)", script).group(1),
+                         re.search(r"export (MIN_REPLICAS=.*)", (SCRIPTS / "apply-hpa.sh").read_text()).group(1))
+        self.assertIn("kubectl get namespace keda", script)   # refuses a cluster where KEDA owns the API
+
     def test_the_external_api_is_registered_apart_from_the_monitoring_every_run_applies(self):
         self.assertNotIn("external.metrics.k8s.io", (DEPLOY / "monitoring.yaml").read_text().split("externalRules:")[0])
         self.assertIn("name: v1beta1.external.metrics.k8s.io", (DEPLOY / "adapter-external.yaml").read_text())

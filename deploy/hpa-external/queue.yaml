@@ -1,0 +1,19 @@
+# The Horizontal Pod Autoscaler on requests waiting, read as KEDA's autoscaler reads it, the sum over the pods as an
+# external metric with a target per pod, but served by prometheus-adapter: KEDA's arithmetic on the adapter's path.
+# The placeholders in braces come from scripts/apply-external.sh.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sim
+  namespace: iab
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: sim}
+  minReplicas: ${MIN_REPLICAS}
+  maxReplicas: ${MAX_REPLICAS}
+  metrics:
+    - type: External
+      external:
+        metric: {name: queue_sum}
+        target: {type: AverageValue, averageValue: "1"}
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}
