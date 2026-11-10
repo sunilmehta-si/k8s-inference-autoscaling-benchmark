@@ -20,6 +20,10 @@
   HPA through prometheus-adapter is below the sampled-pipeline model on every seed and KEDA is not, so some of the
   delay the cluster added was the adapter's path. On concurrency and queue no difference held. The README's KEDA
   section says so and tests hold every number.
+- `external-concurrency`, `external-queue` and `external-utilization`: the HPA reading the signal's sum over the pods as
+  an external metric from prometheus-adapter (`externalRules`, registered for the external metrics API only on clusters
+  without KEDA). It is KEDA's arithmetic on the adapter's path, to tell which of the two made the difference on
+  utilization; the cluster workflow's smoke job checks the path.
 
 ## [0.6.0] - 2026-11-08
 

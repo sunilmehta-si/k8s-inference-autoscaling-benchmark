@@ -61,6 +61,13 @@ KEDA does not. Part of the delay the cluster adds on utilization is therefore th
 its discovery of new pods' series, or the controller's handling of pods it has no sample for) is the next thing to take
 apart.
 
+An `external-` policy takes it apart. It is the HPA reading the signal's sum from prometheus-adapter as an external
+metric (`deploy/hpa-external/`, with the adapter's `externalRules` and [`deploy/adapter-external.yaml`](../deploy/adapter-external.yaml)
+registering it for the external metrics API): KEDA's arithmetic on the adapter's path. Its model is the same controller
+as `keda-`, so the simulation cannot tell them apart, and only the cluster can. If `external-utilization` lands with
+KEDA, the difference is how the HPA averages a pods metric; if it lands with the HPA, it is the adapter's query or
+timing. KEDA registers the same API, so `scripts/apply-external.sh` refuses a cluster with KEDA on it.
+
 ## What differs from the simulation
 
 These are the differences a cluster run can show, and why a comparison is worth making:
