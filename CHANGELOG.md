@@ -14,6 +14,12 @@
 - `results/keda/model` (`make results-keda`): the model's prediction, committed before the cluster ran KEDA. The two
   controllers make the same decisions on concurrency in all eight seeds and differ in one seed on queue and three on
   utilization.
+- `results/keda/cluster-burst`: the burst under the HPA and under KEDA on each signal on the cluster, three seeds each,
+  in one dispatch. On utilization KEDA served more requests in time on every seed (48.2% against 40.6% at the median,
+  first token 2.7 s against 12.7 s) for 7% more replica-seconds, where the model's arithmetic predicted 1.5 points: the
+  HPA through prometheus-adapter is below the sampled-pipeline model on every seed and KEDA is not, so some of the
+  delay the cluster added was the adapter's path. On concurrency and queue no difference held. The README's KEDA
+  section says so and tests hold every number.
 
 ## [0.6.0] - 2026-11-08
 

@@ -54,6 +54,13 @@ Before the cluster ran KEDA, [`results/keda/model`](../results/keda/model/README
 queue per pod and the scraped pipeline, the two controllers make the same decisions on concurrency in all eight seeds,
 and differ in one seed on queue and three on utilization, by little. A difference on the cluster beyond that is the path.
 
+[`results/keda/cluster-burst`](../results/keda/cluster-burst/README.md) is what the cluster said. On concurrency and queue
+no difference held. On utilization KEDA served more in time on every seed, by 7.5 points of goodput at the median, five
+times the model's prediction, and the HPA through the adapter sits below the sampled-pipeline model on every seed where
+KEDA does not. Part of the delay the cluster adds on utilization is therefore the adapter's: which part (its own query,
+its discovery of new pods' series, or the controller's handling of pods it has no sample for) is the next thing to take
+apart.
+
 ## What differs from the simulation
 
 These are the differences a cluster run can show, and why a comparison is worth making:
