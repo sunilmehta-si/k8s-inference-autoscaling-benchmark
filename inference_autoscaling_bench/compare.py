@@ -166,7 +166,11 @@ def markdown(doc: dict) -> str:
              f"as it was {METRICS_LAG_S:g} s earlier, as the cluster's Prometheus scrape and rule intervals make it; and one with a "
              f"queue per pod and that pipeline piece by piece: each pod scraped every {SCRAPE_S:g} s at its own offset, a rule "
              f"evaluated every {SCRAPE_S:g} s at its own offset, and the autoscaler reading the latest evaluation. Each cell is the "
-             "median over the seeds, with the lowest and highest in brackets.", ""]
+             "median over the seeds, with the lowest and highest in brackets."
+             + (" A `keda-` run has KEDA in place of prometheus-adapter: KEDA's operator sums the recorded series in "
+                "Prometheus, and the autoscaler it creates reads that sum as an external metric, averaged over every pod "
+                "the Deployment has; its simulation is the same controller reading that metric."
+                if any(r["policy"].startswith("keda-") for r in doc["rows"]) else ""), ""]
     for policy in policies:
         rows = [r for r in doc["rows"] if r["policy"] == policy]
         cfg = rows[0]["config"]

@@ -224,3 +224,10 @@ class KedaSectionTests(unittest.TestCase):
                 doc = compare.read(path)
                 self.assertNotIn("KEDA", compare.markdown(doc))
                 self.assertEqual(compare.markdown(doc), (path / "README.md").read_text())
+
+
+    def test_the_setup_says_what_a_keda_run_is_only_when_there_is_one(self):
+        doc = compare.read(ROOT / "results/cluster")
+        self.assertNotIn("A `keda-` run", compare.markdown(doc))
+        row = dict(doc["rows"][0], policy="keda-concurrency")
+        self.assertIn("A `keda-` run has KEDA in place of prometheus-adapter", compare.markdown({**doc, "rows": doc["rows"] + [row]}))
