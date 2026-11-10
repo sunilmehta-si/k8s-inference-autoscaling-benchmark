@@ -70,6 +70,11 @@ class KedaSpecTests(unittest.TestCase):
         policy = s.make()
         self.assertEqual((policy.down_window_s, s.replica.startup_s, s.pod_queues, s.scrape_s), (60.0, 20.0, True, 15.0))
 
+    def test_external_is_the_same_controller_as_keda_under_its_own_label(self):
+        external, keda = spec.parse("external-utilization").make(), spec.parse("keda-utilization").make()
+        self.assertEqual((external.signal, external.target, external.external, external.name), ("utilization", 0.6, True, "external-utilization"))
+        self.assertEqual((keda.signal, keda.target, keda.external), (external.signal, external.target, external.external))
+
     def test_an_unknown_keda_signal_is_refused(self):
         with self.assertRaisesRegex(ValueError, r"keda-<"):
             spec.parse("keda-gpu")

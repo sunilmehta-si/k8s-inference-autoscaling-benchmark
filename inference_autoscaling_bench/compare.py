@@ -39,8 +39,9 @@ COMPARED = [
 
 
 def autoscaled(policy: str) -> bool:
-    """Whether a policy has an autoscaler, and so a scale-down window: the HPA's or the one KEDA creates."""
-    return policy.startswith(("hpa-", "keda-"))
+    """Whether a policy has an autoscaler, and so a scale-down window: the HPA's on a pods or an external metric, or the
+    one KEDA creates."""
+    return policy.startswith(("hpa-", "keda-", "external-"))
 
 
 # Which way is better for the metrics that have one: +1 higher, -1 lower. The others (pods, scaling events) are reported

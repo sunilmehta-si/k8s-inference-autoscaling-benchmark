@@ -43,7 +43,8 @@ class SimulateLikeTests(unittest.TestCase):
         self.assertEqual(got, {k: v for k, v in rows[0].items() if k not in ("policy", "seed")})
 
     def test_only_an_autoscaler_has_a_scale_down_window(self):
-        self.assertEqual([compare.autoscaled(p) for p in ("hpa-queue", "keda-queue", "static-24")], [True, True, False])
+        self.assertEqual([compare.autoscaled(p) for p in ("hpa-queue", "keda-queue", "external-queue", "static-24")],
+                         [True, True, True, False])
 
     def test_a_static_pool_is_simulated_without_a_scale_down_window(self):
         got = compare.simulate_like(cluster_run(policy="static-4"), SMOKE)
