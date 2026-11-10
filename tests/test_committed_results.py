@@ -657,3 +657,45 @@ class SampledPipelineTests(unittest.TestCase):
         for i, ramp in enumerate(self.RAMPS):
             with self.subTest(ramp=ramp):
                 self.assertLess(abs(lag[i] - cluster[i]), abs(scrape[i] - cluster[i]))
+
+
+class KedaModelTests(unittest.TestCase):
+    """results/keda/model: the HPA and KEDA on each signal in the model, committed before the cluster ran them."""
+    DIR = ROOT / "results" / "keda" / "model"
+
+    def test_it_is_what_the_makefile_builds_and_its_report_and_chart_regenerate(self):
+        self.assertIn("--out results/keda/model", (ROOT / "Makefile").read_text())
+        doc = results.read(self.DIR)
+        self.assertEqual((self.DIR / "README.md").read_text(), report.markdown(doc))
+        self.assertEqual((self.DIR / "chart.svg").read_text(), __import__("inference_autoscaling_bench.chart", fromlist=["svg"]).svg(doc))
+
+    def test_every_signal_runs_both_ways_on_eight_seeds_with_the_cluster_pipeline(self):
+        doc = results.read(self.DIR)
+        for signal in ("concurrency", "queue", "utilization"):
+            for scaler in ("hpa", "keda"):
+                with self.subTest(policy=f"{scaler}-{signal}"):
+                    text = next(p["text"] for p in doc["policies"] if p["label"] == f"{scaler}-{signal}")
+                    self.assertEqual(text, f"{scaler}-{signal}={scaler}-{signal}:route=pod,scrape=15")
+                    self.assertEqual(sorted(r["seed"] for r in doc["runs"] if r["policy"] == f"{scaler}-{signal}"), list(range(1, 9)))
+
+    def test_the_first_run_of_every_policy_is_reproduced_from_its_spec(self):
+        from inference_autoscaling_bench.experiment import run_matrix
+        doc = results.read(self.DIR)
+        w = workload.load(ROOT / "workloads" / "burst.json")
+        for policy in doc["policies"]:
+            with self.subTest(policy=policy["label"]):
+                rows, _ = run_matrix(w, [spec.parse(policy["text"])], [1], Bounds(policy["min_replicas"], doc["bounds"]["max_replicas"]))
+                saved = next(r for r in doc["runs"] if r["policy"] == policy["label"] and r["seed"] == 1)
+                for key, value in rows[0].items():
+                    if key not in ("policy", "seed"):
+                        self.assertAlmostEqual(saved[key], value, delta=abs(value) * 1e-9 + 1e-9, msg=key)
+
+    def test_the_model_predicts_the_same_decisions_on_concurrency_and_few_differences_elsewhere(self):
+        doc = results.read(self.DIR)
+        def runs(policy):
+            return {r["seed"]: r for r in doc["runs"] if r["policy"] == policy}
+        differ = {}
+        for signal in ("concurrency", "queue", "utilization"):
+            hpa, keda = runs(f"hpa-{signal}"), runs(f"keda-{signal}")
+            differ[signal] = sum(hpa[s]["replica_seconds"] != keda[s]["replica_seconds"] for s in hpa)
+        self.assertEqual(differ, {"concurrency": 0, "queue": 1, "utilization": 3})

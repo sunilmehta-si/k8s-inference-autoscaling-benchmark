@@ -1,7 +1,7 @@
 # Everyday commands. Python 3.10+; the package has no dependencies (pip install -e . for the iab command).
 PY ?= python3
 
-.PHONY: test results results-pod-queues results-ramps clean
+.PHONY: test results results-pod-queues results-ramps results-keda clean
 
 test:  ## run the unit tests
 	$(PY) -W error::SyntaxWarning -m unittest discover -s tests -t .
@@ -52,6 +52,13 @@ results-ramps:  ## the same deployment on ramps of 30, 120, 300 and 600 s, in re
 	    --title "A ramp from 3 to 20 requests per second over $$r s" \
 	    -p static-24 -p hpa-concurrency -p hpa-utilization -p cluster-like=hpa-concurrency:route=pod,lag=30 || exit 1; \
 	done
+
+results-keda:  ## the HPA and KEDA on each signal in the model, with a queue per pod and the scraped pipeline, in results/keda/model
+	$(PY) -m inference_autoscaling_bench matrix workloads/burst.json --runs 8 --out results/keda/model \
+	  --title "Does the autoscaler KEDA creates decide differently? The model, before the cluster" \
+	  -p hpa-concurrency=hpa-concurrency:route=pod,scrape=15 -p keda-concurrency=keda-concurrency:route=pod,scrape=15 \
+	  -p hpa-queue=hpa-queue:route=pod,scrape=15 -p keda-queue=keda-queue:route=pod,scrape=15 \
+	  -p hpa-utilization=hpa-utilization:route=pod,scrape=15 -p keda-utilization=keda-utilization:route=pod,scrape=15
 
 clean:
 	rm -rf build dist *.egg-info
