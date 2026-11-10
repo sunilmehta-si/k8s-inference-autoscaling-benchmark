@@ -25,7 +25,8 @@ def versions() -> dict:
 class PinTests(unittest.TestCase):
     def test_every_image_is_pinned_by_digest(self):
         v = versions()
-        for key in ("KIND_NODE_IMAGE", "SIM_IMAGE", "PROMETHEUS_IMAGE", "PROMETHEUS_ADAPTER_IMAGE", "PYTHON_IMAGE"):
+        for key in ("KIND_NODE_IMAGE", "SIM_IMAGE", "PROMETHEUS_IMAGE", "PROMETHEUS_ADAPTER_IMAGE", "PYTHON_IMAGE", "KEDA_IMAGE",
+                    "KEDA_METRICS_APISERVER_IMAGE", "KEDA_ADMISSION_WEBHOOKS_IMAGE"):
             with self.subTest(image=key):
                 self.assertRegex(v[key], r"@sha256:[0-9a-f]{64}$")
 
@@ -33,9 +34,14 @@ class PinTests(unittest.TestCase):
         v = versions()
         self.assertIn(f":{v['PROMETHEUS_VERSION']}@", v["PROMETHEUS_IMAGE"])
         self.assertIn(f":{v['PROMETHEUS_ADAPTER_VERSION']}@", v["PROMETHEUS_ADAPTER_IMAGE"])
+        for key in ("KEDA_IMAGE", "KEDA_METRICS_APISERVER_IMAGE", "KEDA_ADMISSION_WEBHOOKS_IMAGE"):
+            with self.subTest(image=key):   # KEDA tags its images without the v its releases carry
+                self.assertIn(f":{v['KEDA_VERSION'].removeprefix('v')}@", v[key])
 
-    def test_the_downloaded_binary_has_a_checksum(self):
-        self.assertRegex(versions()["KIND_SHA256_LINUX_AMD64"], r"^[0-9a-f]{64}$")
+    def test_every_download_has_a_checksum(self):
+        for key in ("KIND_SHA256_LINUX_AMD64", "KEDA_MANIFEST_SHA256"):
+            with self.subTest(download=key):
+                self.assertRegex(versions()[key], r"^[0-9a-f]{64}$")
 
     def test_the_dockerfile_takes_its_base_from_the_pin(self):
         text = (ROOT / "Dockerfile").read_text()
