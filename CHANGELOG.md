@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-10
+
+KEDA beside the HPA on the cluster, and a third path that tells them apart. KEDA reads the same signals by its own
+path, and the model predicted it would decide almost exactly as the HPA does. On the cluster no difference between the
+paths held over two dispatches of the same seeds: KEDA led on utilization on every seed once and trailed on every seed
+once. The first dispatch's reading, that the path made the difference, was withdrawn.
+
 ### Added
 - KEDA as the other path to the same signals. `keda-concurrency`, `keda-queue` and `keda-utilization` run KEDA v2.21.0
   (release manifest by checksum, images by digest) in place of prometheus-adapter: a ScaledObject per signal in
@@ -28,6 +35,12 @@
   external HPA and KEDA. It reversed the first dispatch: KEDA was below the HPA on every seed (41.3% against 43.4%), the
   external HPA at 44.0%, and KEDA's own runs moved 3.0 to 7.9 points between dispatches. The README withdraws the
   reading that the path made the difference; over both dispatches no difference between the paths holds.
+
+### Changed
+- A difference on the cluster is claimed only when it holds over more than one dispatch: three seeds on one dispatch
+  share the same runners and hour, and utilization's goodput moved by up to 7.9 points between two dispatches of the
+  same seed ([docs/methodology.md](docs/methodology.md)).
+- The methodology no longer says there is no KEDA or that the cluster stage is still to come.
 
 ## [0.6.0] - 2026-11-08
 
