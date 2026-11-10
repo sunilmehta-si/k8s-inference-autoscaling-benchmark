@@ -63,6 +63,13 @@ The signals were each run at one pre-chosen target, so [the signals dataset](../
 those four settings, not the four signals in general. [The targets dataset](../results/targets/README.md) shows how
 far one signal moves when its target does.
 
+The KEDA comparison was predicted before it ran: [results/keda/model](../results/keda/model/README.md) was committed
+while the first cluster dispatch was running. Changed after a first look: that dispatch put KEDA ahead on utilization on
+every seed, and the README briefly said the metrics path made the difference. A second dispatch of the same seeds
+reversed it, and the claim was withdrawn. Since then a difference on the cluster is claimed only when it holds over
+more than one dispatch: three seeds on one dispatch share the same runners and hour, and utilization's goodput moved by
+up to 7.9 points between two dispatches of the same seed.
+
 ## What it cannot tell you
 
 - **Absolute numbers belong to the model.** A p95 of 47 s is what this pod model, this trace and this controller give;
@@ -76,9 +83,11 @@ far one signal moves when its target does.
   interval and usually more, which makes every policy in the seven datasets look better than it would be; on the
   cluster, `lag=30` with a queue per pod brings the HPA policies' goodput within 3.2 points of the real thing, and
   `scrape=15` places the ramps' utilization flip where the cluster does (the README's cluster stage).
-- **There is no KEDA, Knative or predictive scaling.** They are different controllers around the same signals. The
-  HPA is modelled because it is what most clusters run.
+- **There is no Knative or predictive scaling.** They are different controllers around the same signals. KEDA is
+  modelled as the HPA it creates, reading the sum over the pods as an external metric (`keda-SIGNAL`), and run on the
+  cluster beside the HPA; KEDA's own polling and activation are not modelled, since with at least two pods it never
+  scales from zero.
 - **One workload.** A different trace changes the numbers, and a gentler ramp changes the conclusions.
 
-A cluster stage, with real pods and the Kubernetes controller, is the next step; until it exists nothing here is
-measured on a cluster.
+The cluster stage ([docs/cluster.md](cluster.md)) runs the same policies with the real Kubernetes controller, Prometheus
+and KEDA in front of simulated pods; the comparisons there are measured, the datasets above are the model.
