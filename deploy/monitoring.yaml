@@ -226,6 +226,17 @@ data:
           matches: "^iab_(.*)$"
           as: "${1}"
         metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+    # The same series summed over the namespace's pods, as external metrics: what KEDA serves, by the adapter's path.
+    # They are reachable only where deploy/adapter-external.yaml registers the adapter for the external metrics API.
+    externalRules:
+      - seriesQuery: '{__name__=~"^iab_(concurrency|queue|utilization)$",namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: namespace}
+        name:
+          matches: "^iab_(.*)$"
+          as: "${1}_sum"
+        metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
 ---
 apiVersion: apps/v1
 kind: Deployment

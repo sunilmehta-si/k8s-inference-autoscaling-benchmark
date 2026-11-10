@@ -277,5 +277,29 @@ class KedaTests(unittest.TestCase):
             self.assertIn("serverAddress: http://prometheus.monitoring.svc:9090", path.read_text())
 
 
+
+class AdapterExternalTests(unittest.TestCase):
+    """The adapter can serve each signal's sum as an external metric: KEDA's arithmetic on the adapter's path."""
+
+    def test_the_adapter_sums_every_recorded_series_as_an_external_metric(self):
+        monitoring = (DEPLOY / "monitoring.yaml").read_text()
+        rules = monitoring.split("externalRules:", 1)[1].split("---", 1)[0]
+        self.assertIn("'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'", rules)
+        self.assertIn('as: "${1}_sum"', rules)
+        self.assertNotIn("pod: {resource: pod}", rules)   # summed over the namespace's pods, not per pod
+        recorded = set(re.findall(r"record: iab_(\w+)", monitoring))
+        self.assertEqual(set(re.search(r'iab_\(([a-z|]+)\)', rules).group(1).split("|")), recorded)
+
+    def test_the_hpa_may_read_exactly_the_three_sums(self):
+        text = (DEPLOY / "adapter-external.yaml").read_text()
+        self.assertIn("resources: [concurrency_sum, queue_sum, utilization_sum]", text)
+        self.assertIn("verbs: [get, list]", text)
+        self.assertNotRegex(text, r"(verbs|resources|apiGroups):\s*\[?\s*[\"']?\*")
+
+    def test_the_external_api_is_registered_apart_from_the_monitoring_every_run_applies(self):
+        self.assertNotIn("external.metrics.k8s.io", (DEPLOY / "monitoring.yaml").read_text().split("externalRules:")[0])
+        self.assertIn("name: v1beta1.external.metrics.k8s.io", (DEPLOY / "adapter-external.yaml").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
