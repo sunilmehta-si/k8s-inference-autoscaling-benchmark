@@ -211,6 +211,26 @@ class KedaTests(unittest.TestCase):
                                 "scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}", "scaleTargetRef: {name: sim}"):
                     self.assertIn(setting, text)
 
+    def test_keda_is_installed_from_the_pinned_manifest_with_the_pinned_images(self):
+        text = (SCRIPTS / "deploy-keda.sh").read_text()
+        self.assertIn('sha256sum -c -', text)
+        self.assertIn("${KEDA_MANIFEST_SHA256}", text)
+        self.assertIn("releases/download/${KEDA_VERSION}/keda-${tag}.yaml", text)
+        for key in ("KEDA_IMAGE", "KEDA_METRICS_APISERVER_IMAGE", "KEDA_ADMISSION_WEBHOOKS_IMAGE"):
+            with self.subTest(image=key):
+                self.assertIn("${%s}" % key, text)
+        self.assertIn("--server-side", text)   # the CRDs are too large for a client-side apply
+
+    def test_the_image_swap_replaces_each_image_exactly_once(self):
+        # The swap refuses a manifest that does not name an image exactly once, so a new KEDA release that renames or
+        # duplicates one fails the install instead of running an unpinned image.
+        text = (SCRIPTS / "deploy-keda.sh").read_text()
+        self.assertIn('grep -c "image: ghcr.io/kedacore/${name}:${tag}$" "$manifest")" = 1', text)
+        names = re.findall(r'"(keda[a-z-]*):\$\{(KEDA_[A-Z_]+)\}"', text)
+        self.assertEqual(sorted(n for n, _ in names), ["keda", "keda-admission-webhooks", "keda-metrics-apiserver"])
+        for name, key in names:
+            self.assertIn(f"/{name}:", versions()[key])
+
     def test_keda_asks_the_same_prometheus(self):
         for path in (DEPLOY / "keda").glob("*.yaml"):
             self.assertIn("serverAddress: http://prometheus.monitoring.svc:9090", path.read_text())
