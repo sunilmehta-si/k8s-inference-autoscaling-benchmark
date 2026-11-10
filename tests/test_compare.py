@@ -232,3 +232,28 @@ class KedaSectionTests(unittest.TestCase):
         self.assertNotIn("A `keda-` run", compare.markdown(doc))
         row = dict(doc["rows"][0], policy="keda-concurrency")
         self.assertIn("A `keda-` run has KEDA in place of prometheus-adapter", compare.markdown({**doc, "rows": doc["rows"] + [row]}))
+
+
+class MatchupTests(unittest.TestCase):
+    ROWS = [keda_row(f"{path}-utilization", seed, goodput=g) for path, goodputs in
+            (("hpa", (0.40, 0.39, 0.44)), ("keda", (0.49, 0.47, 0.48)), ("external", (0.48, 0.40, 0.47))) for seed, g in zip((1, 2, 3), goodputs)]
+
+    def test_the_external_hpa_is_set_against_the_hpa_and_keda_against_it(self):
+        text = "\n".join(compare.keda_section({"rows": self.ROWS}))
+        titles = re.findall(r"^### (.+)$", text, re.M)
+        self.assertEqual(titles, ["KEDA against the HPA, on the cluster", "The external HPA against the HPA, on the cluster",
+                                  "KEDA against the external HPA, on the cluster"])
+        self.assertIn("| Goodput (TTFT within the objective) | 40.0% <sub>(39.0%–44.0%)</sub> | 47.0% <sub>(40.0%–48.0%)</sub> "
+                      "| +7.0 points | External HPA better in 3, worse in 0 of 3 |", text)
+        self.assertIn("| Metric | External HPA | KEDA | KEDA minus External HPA | Seed by seed |", text)
+        self.assertIn("KEDA better in 3, worse in 0 of 3 |", text)
+
+    def test_pairs_take_any_two_paths(self):
+        found = compare.pairs({"rows": self.ROWS}, "external", "hpa")
+        self.assertEqual([(s, [r["policy"] for r in a], [r["policy"] for r in b]) for s, a, b in found],
+                         [("utilization", ["hpa-utilization"] * 3, ["external-utilization"] * 3)])
+
+    def test_without_external_runs_only_keda_against_the_hpa_appears(self):
+        rows = [r for r in self.ROWS if not r["policy"].startswith("external-")]
+        self.assertEqual(re.findall(r"^### (.+)$", "\n".join(compare.keda_section({"rows": rows})), re.M),
+                         ["KEDA against the HPA, on the cluster"])

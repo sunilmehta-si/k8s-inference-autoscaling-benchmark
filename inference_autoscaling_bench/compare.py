@@ -49,49 +49,71 @@ def autoscaled(policy: str) -> bool:
 BETTER = {"goodput": 1, "ttft_p50_ms": -1, "ttft_p95_ms": -1, "ttft_p99_ms": -1, "unhealthy_s": -1, "replica_seconds": -1}
 
 
-def pairs(doc: dict) -> list[tuple[str, list[dict], list[dict]]]:
-    """(signal, HPA rows, KEDA rows) for every signal run both ways, on the seeds both ran, in seed order."""
+# The ways a signal can reach the autoscaler, as policy prefixes, with the names the report gives them.
+PATHS = {"hpa": "HPA", "keda": "KEDA", "external": "External HPA"}
+# Which paths a report sets against which: KEDA and the external HPA each against the HPA, then KEDA against the
+# external HPA, which share the controller's arithmetic and differ only in who serves the sum.
+MATCHUPS = (("keda", "hpa"), ("external", "hpa"), ("keda", "external"))
+MATCHUP_TITLE = {("keda", "hpa"): "KEDA against the HPA", ("external", "hpa"): "The external HPA against the HPA",
+                 ("keda", "external"): "KEDA against the external HPA"}
+MATCHUP_SETUP = {
+    ("keda", "hpa"): "the HPA reading a pods metric through prometheus-adapter, and the HPA KEDA creates reading the sum "
+                     "over the pods as an external metric",
+    ("external", "hpa"): "the HPA reading a pods metric through prometheus-adapter, and the HPA reading the sum over the "
+                         "pods as an external metric from the same adapter",
+    ("keda", "external"): "the HPA reading the sum over the pods as an external metric from prometheus-adapter, and the "
+                          "HPA KEDA creates reading the same sum from KEDA",
+}
+
+
+def pairs(doc: dict, challenger: str = "keda", baseline: str = "hpa") -> list[tuple[str, list[dict], list[dict]]]:
+    """(signal, baseline rows, challenger rows) for every signal run both ways, on the seeds both ran, in seed order."""
     out = []
-    for policy in sorted({r["policy"] for r in doc["rows"] if r["policy"].startswith("keda-")}):
-        signal = policy[len("keda-"):]
-        keda = {r["seed"]: r for r in doc["rows"] if r["policy"] == policy}
-        hpa = {r["seed"]: r for r in doc["rows"] if r["policy"] == f"hpa-{signal}"}
-        seeds = sorted(keda.keys() & hpa.keys())
+    for policy in sorted({r["policy"] for r in doc["rows"] if r["policy"].startswith(f"{challenger}-")}):
+        signal = policy[len(challenger) + 1:]
+        theirs = {r["seed"]: r for r in doc["rows"] if r["policy"] == policy}
+        ours = {r["seed"]: r for r in doc["rows"] if r["policy"] == f"{baseline}-{signal}"}
+        seeds = sorted(theirs.keys() & ours.keys())
         if seeds:
-            out.append((signal, [hpa[s] for s in seeds], [keda[s] for s in seeds]))
+            out.append((signal, [ours[s] for s in seeds], [theirs[s] for s in seeds]))
     return out
 
 
-def _seed_by_seed(hpa: list[float], keda: list[float], key: str) -> str:
-    n = len(hpa)
+def _seed_by_seed(base: list[float], other: list[float], key: str, name: str = "KEDA") -> str:
+    n = len(base)
     if key in BETTER:
-        better = sum((k - h) * BETTER[key] > 0 for h, k in zip(hpa, keda))
-        worse = sum((k - h) * BETTER[key] < 0 for h, k in zip(hpa, keda))
-        return f"KEDA better in {better}, worse in {worse} of {n}"
-    higher = sum(k > h for h, k in zip(hpa, keda))
-    lower = sum(k < h for h, k in zip(hpa, keda))
-    return f"KEDA higher in {higher}, lower in {lower} of {n}"
+        better = sum((k - h) * BETTER[key] > 0 for h, k in zip(base, other))
+        worse = sum((k - h) * BETTER[key] < 0 for h, k in zip(base, other))
+        return f"{name} better in {better}, worse in {worse} of {n}"
+    higher = sum(k > h for h, k in zip(base, other))
+    lower = sum(k < h for h, k in zip(base, other))
+    return f"{name} higher in {higher}, lower in {lower} of {n}"
+
+
+def matchup_section(doc: dict, challenger: str, baseline: str) -> list[str]:
+    """One path against another on the cluster, signal by signal and seed by seed: the same signal, target, bounds and
+    window, so a difference is the path the signal takes. Empty when no signal was run both ways."""
+    found = pairs(doc, challenger, baseline)
+    if not found:
+        return []
+    a, b = PATHS[challenger], PATHS[baseline]
+    lines = [f"### {MATCHUP_TITLE[(challenger, baseline)]}, on the cluster", "",
+             f"Each signal run both ways on the same seeds: {MATCHUP_SETUP[(challenger, baseline)]}. A seed counts as better "
+             "or worse when its two runs differ at all.", ""]
+    for signal, base, other in found:
+        lines += [f"#### {signal}", "", f"Seeds {', '.join(str(r['seed']) for r in base)}.", "",
+                  f"| Metric | {b} | {a} | {a} minus {b} | Seed by seed |", "|---|---|---|---|---|"]
+        for key, name, fmt in COMPARED:
+            h = [r["cluster"][key] for r in base]
+            k = [r["cluster"][key] for r in other]
+            lines.append(f"| {name} | {_cell(h, fmt)} | {_cell(k, fmt)} | {_diff(k, h, key, fmt)} | {_seed_by_seed(h, k, key, a)} |")
+        lines.append("")
+    return lines
 
 
 def keda_section(doc: dict) -> list[str]:
-    """KEDA against the HPA on the cluster, signal by signal and seed by seed: the same signal, target, bounds and
-    window, so a difference is the path the signal takes. Empty when no signal was run both ways."""
-    found = pairs(doc)
-    if not found:
-        return []
-    lines = ["### KEDA against the HPA, on the cluster", "",
-             "Each signal run both ways on the same seeds: the HPA reading a pods metric through prometheus-adapter, and "
-             "the HPA KEDA creates reading the sum over the pods as an external metric. A seed counts as better or worse "
-             "when its two runs differ at all.", ""]
-    for signal, hpa, keda in found:
-        lines += [f"#### {signal}", "", f"Seeds {', '.join(str(r['seed']) for r in hpa)}.", "",
-                  "| Metric | HPA | KEDA | KEDA minus HPA | Seed by seed |", "|---|---|---|---|---|"]
-        for key, name, fmt in COMPARED:
-            h = [r["cluster"][key] for r in hpa]
-            k = [r["cluster"][key] for r in keda]
-            lines.append(f"| {name} | {_cell(h, fmt)} | {_cell(k, fmt)} | {_diff(k, h, key, fmt)} | {_seed_by_seed(h, k, key)} |")
-        lines.append("")
-    return lines
+    """Every matchup the comparison holds, KEDA against the HPA first."""
+    return [line for challenger, baseline in MATCHUPS for line in matchup_section(doc, challenger, baseline)]
 
 
 def load_cluster_runs(directory: str | Path) -> list[dict]:
