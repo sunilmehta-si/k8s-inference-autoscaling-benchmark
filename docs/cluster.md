@@ -54,20 +54,20 @@ Before the cluster ran KEDA, [`results/keda/model`](../results/keda/model/README
 queue per pod and the scraped pipeline, the two controllers make the same decisions on concurrency in all eight seeds,
 and differ in one seed on queue and three on utilization, by little. A difference on the cluster beyond that is the path.
 
-[`results/keda/cluster-burst`](../results/keda/cluster-burst/README.md) is what the cluster said. On concurrency and queue
-no difference held. On utilization KEDA served more in time on every seed, by 7.5 points of goodput at the median, five
-times the model's prediction, and the HPA through the adapter sits below the sampled-pipeline model on every seed where
-KEDA does not. On the 30 s ramp ([`results/keda/cluster-ramp-30`](../results/keda/cluster-ramp-30/README.md)) the gain did
-not repeat: KEDA on utilization was worse on every seed, two of them by little. So either part of the delay on the
-burst is the adapter's (its own query, its discovery of new pods' series, or the controller's handling of pods it has
-no sample for), or three seeds of utilization are too few to tell, and both are worth taking apart.
+[`results/keda/cluster-burst`](../results/keda/cluster-burst/README.md) is what the cluster said first. On concurrency and
+queue no difference held. On utilization KEDA served more in time on every seed, by 7.5 points of goodput at the median,
+five times the model's prediction.
 
-An `external-` policy takes it apart. It is the HPA reading the signal's sum from prometheus-adapter as an external
-metric (`deploy/hpa-external/`, with the adapter's `externalRules` and [`deploy/adapter-external.yaml`](../deploy/adapter-external.yaml)
-registering it for the external metrics API): KEDA's arithmetic on the adapter's path. Its model is the same controller
-as `keda-`, so the simulation cannot tell them apart, and only the cluster can. If `external-utilization` lands with
-KEDA, the difference is how the HPA averages a pods metric; if it lands with the HPA, it is the adapter's query or
-timing. KEDA registers the same API, so `scripts/apply-external.sh` refuses a cluster with KEDA on it.
+It did not hold. An `external-` policy is the HPA reading the signal's sum from prometheus-adapter as an external metric
+(`deploy/hpa-external/`, with the adapter's `externalRules` and [`deploy/adapter-external.yaml`](../deploy/adapter-external.yaml)
+registering it for the external metrics API): KEDA's arithmetic on the adapter's path, meant to tell the path from the
+arithmetic. Its model is the same controller as `keda-`, so only the cluster can tell them apart. KEDA registers the same
+API, so `scripts/apply-external.sh` refuses a cluster with KEDA on it. A second dispatch of the same seeds with all three
+([`results/keda/cluster-burst-utilization`](../results/keda/cluster-burst-utilization/README.md)) put KEDA below the HPA
+on every seed and the external HPA between them, and moved KEDA's own runs by 3.0 to 7.9 points; the 30 s ramp
+([`results/keda/cluster-ramp-30`](../results/keda/cluster-ramp-30/README.md)) put KEDA behind as well. Utilization's
+goodput moves this much from one dispatch to the next, so a difference between paths needs more seeds and more than one
+dispatch before it is claimed.
 
 ## What differs from the simulation
 

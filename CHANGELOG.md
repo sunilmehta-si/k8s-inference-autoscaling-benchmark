@@ -16,16 +16,18 @@
   utilization.
 - `results/keda/cluster-burst`: the burst under the HPA and under KEDA on each signal on the cluster, three seeds each,
   in one dispatch. On utilization KEDA served more requests in time on every seed (48.2% against 40.6% at the median,
-  first token 2.7 s against 12.7 s) for 7% more replica-seconds, where the model's arithmetic predicted 1.5 points: the
-  HPA through prometheus-adapter is below the sampled-pipeline model on every seed and KEDA is not. On concurrency and
-  queue no difference held. The README's KEDA section says so and tests hold every number.
+  first token 2.7 s against 12.7 s) for 7% more replica-seconds, where the model's arithmetic predicted 1.5 points. On
+  concurrency and queue no difference held. The second dispatch below did not repeat the utilization lead.
 - `results/keda/cluster-ramp-30`: the 30 s ramp under the HPA and under KEDA on concurrency and utilization, three seeds
   each. The burst's gain on utilization did not repeat: KEDA was worse on every seed, by 0.3, 7.5 and 1.3 points. On
   concurrency KEDA was better on two seeds and used fewer replica-seconds on all three.
 - `external-concurrency`, `external-queue` and `external-utilization`: the HPA reading the signal's sum over the pods as
   an external metric from prometheus-adapter (`externalRules`, registered for the external metrics API only on clusters
-  without KEDA). It is KEDA's arithmetic on the adapter's path, to tell which of the two made the difference on
-  utilization; the cluster workflow's smoke job checks the path.
+  without KEDA): KEDA's arithmetic on the adapter's path. The cluster workflow's smoke job checks the path.
+- `results/keda/cluster-burst-utilization`: the burst on utilization again, same seeds and settings, under the HPA, the
+  external HPA and KEDA. It reversed the first dispatch: KEDA was below the HPA on every seed (41.3% against 43.4%), the
+  external HPA at 44.0%, and KEDA's own runs moved 3.0 to 7.9 points between dispatches. The README withdraws the
+  reading that the path made the difference; over both dispatches no difference between the paths holds.
 
 ## [0.6.0] - 2026-11-08
 
