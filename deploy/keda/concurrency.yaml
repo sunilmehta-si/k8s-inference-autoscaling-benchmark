@@ -1,0 +1,24 @@
+# KEDA on requests in the system per pod, target 6: the same signal and target as deploy/hpa/concurrency.yaml, read
+# another way. KEDA's operator sums the recorded series in Prometheus, and the HPA it creates (keda-hpa-sim) reads that
+# sum through the external metrics API as an average per pod, with no prometheus-adapter in between. The placeholders in
+# braces come from scripts/apply-keda.sh.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: sim
+  namespace: iab
+spec:
+  scaleTargetRef: {name: sim}
+  minReplicaCount: ${MIN_REPLICAS}
+  maxReplicaCount: ${MAX_REPLICAS}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}
+  triggers:
+    - type: prometheus
+      metricType: AverageValue
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        query: sum(iab_concurrency{namespace="iab"})
+        threshold: "6"

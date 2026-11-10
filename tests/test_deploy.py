@@ -179,5 +179,42 @@ class ManifestTests(unittest.TestCase):
                     self.assertEqual(float(target), 0.6 if signal == "utilization" else float(expected[signal]))
 
 
+class KedaTests(unittest.TestCase):
+    """KEDA must scale on exactly what the HPA scales on, so a difference between them is the path, not the policy."""
+
+    def test_every_signal_has_a_scaled_object_beside_its_hpa(self):
+        self.assertEqual(sorted(p.name for p in (DEPLOY / "keda").glob("*.yaml")),
+                         sorted(p.name for p in (DEPLOY / "hpa").glob("*.yaml")))
+
+    def test_keda_sums_the_series_prometheus_records_for_its_signal(self):
+        recorded = set(re.findall(r"record: iab_(\w+)", (DEPLOY / "monitoring.yaml").read_text()))
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            query = re.search(r"query: (.+)", path.read_text()).group(1)
+            with self.subTest(file=path.name):
+                self.assertEqual(query, f'sum(iab_{path.stem}{{namespace="iab"}})')
+                self.assertIn(path.stem, recorded)
+
+    def test_keda_targets_the_hpas_value_as_an_average_per_pod(self):
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            text = path.read_text()
+            hpa = re.search(r'averageValue: "?([\w.]+)"?', (DEPLOY / "hpa" / path.name).read_text()).group(1)
+            hpa_value = float(hpa[:-1]) / 1000 if hpa.endswith("m") else float(hpa)
+            with self.subTest(file=path.name):
+                self.assertIn("metricType: AverageValue", text)
+                self.assertEqual(float(re.search(r'threshold: "([\d.]+)"', text).group(1)), hpa_value)
+
+    def test_keda_has_the_hpas_bounds_and_scale_down_window(self):
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            text = path.read_text()
+            with self.subTest(file=path.name):
+                for setting in ("minReplicaCount: ${MIN_REPLICAS}", "maxReplicaCount: ${MAX_REPLICAS}",
+                                "scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}", "scaleTargetRef: {name: sim}"):
+                    self.assertIn(setting, text)
+
+    def test_keda_asks_the_same_prometheus(self):
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            self.assertIn("serverAddress: http://prometheus.monitoring.svc:9090", path.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
