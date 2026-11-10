@@ -248,6 +248,14 @@ class KedaTests(unittest.TestCase):
             with self.subTest(autoscaler=autoscaler):
                 self.assertLess(text.index(autoscaler), servers)
 
+    def test_a_keda_run_waits_for_the_autoscaler_keda_creates_to_read_the_external_metric(self):
+        run = (SCRIPTS / "run.sh").read_text()
+        self.assertIn('keda-*)', run)
+        self.assertLess(run.index("scripts/deploy-monitoring.sh"), run.index("scripts/deploy-keda.sh"))   # KEDA asks Prometheus
+        self.assertLess(run.index("scripts/deploy-keda.sh"), run.index('scripts/apply-keda.sh "$signal"'))
+        self.assertIn("hpa=keda-hpa-sim value='{.status.currentMetrics[0].external.current.averageValue}'", run)
+        self.assertIn("kubectl -n \"$NS\" get hpa keda-hpa-sim", (SCRIPTS / "apply-keda.sh").read_text())
+
     def test_keda_asks_the_same_prometheus(self):
         for path in (DEPLOY / "keda").glob("*.yaml"):
             self.assertIn("serverAddress: http://prometheus.monitoring.svc:9090", path.read_text())
