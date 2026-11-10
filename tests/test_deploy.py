@@ -73,6 +73,16 @@ class PinTests(unittest.TestCase):
             hpa |= set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", path.read_text()))
         listed = set(re.findall(r"\$\{([A-Z_]+)\}", re.search(r"envsubst '([^']*)'", (SCRIPTS / "apply-hpa.sh").read_text()).group(1)))
         self.assertEqual(hpa, listed)
+        keda = set()
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            keda |= set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", path.read_text()))
+        listed = set(re.findall(r"\$\{([A-Z_]+)\}", re.search(r"envsubst '([^']*)'", (SCRIPTS / "apply-keda.sh").read_text()).group(1)))
+        self.assertEqual(keda, listed)
+
+    def test_keda_gets_the_same_defaults_as_the_hpa(self):
+        def defaults(script):
+            return re.search(r"export (MIN_REPLICAS=.*)", (SCRIPTS / script).read_text()).group(1)
+        self.assertEqual(defaults("apply-keda.sh"), defaults("apply-hpa.sh"))
 
     def test_every_variable_substituted_is_defined_by_the_versions_or_the_script(self):
         v = versions()
