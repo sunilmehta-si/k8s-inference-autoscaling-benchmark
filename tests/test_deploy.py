@@ -327,6 +327,12 @@ class AdapterExternalTests(unittest.TestCase):
         self.assertIn("hpa=sim value='{.status.currentMetrics[0].external.current.averageValue}'", branch)
         self.assertNotIn("deploy-keda", branch)
 
+    def test_the_smoke_job_checks_the_external_path_after_the_pods_metric_and_never_beside_keda(self):
+        text = (ROOT / ".github/workflows/cluster.yml").read_text()
+        smoke = text.split("\n  smoke:\n", 1)[1].split("\n  keda-smoke:\n", 1)[0]
+        self.assertLess(smoke.index("scripts/smoke.sh"), smoke.index("scripts/smoke-external.sh"))
+        self.assertNotIn("keda", smoke)
+
     def test_the_external_api_is_registered_apart_from_the_monitoring_every_run_applies(self):
         self.assertNotIn("external.metrics.k8s.io", (DEPLOY / "monitoring.yaml").read_text().split("externalRules:")[0])
         self.assertIn("name: v1beta1.external.metrics.k8s.io", (DEPLOY / "adapter-external.yaml").read_text())

@@ -49,6 +49,8 @@ jobs:
         run: scripts/deploy-monitoring.sh
       - name: The metrics path, end to end
         run: scripts/smoke.sh
+      - name: The adapter's external path, end to end
+        run: scripts/smoke-external.sh
       - name: Cluster state on failure
         if: failure()
         run: |
