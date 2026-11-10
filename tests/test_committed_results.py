@@ -716,3 +716,68 @@ class KedaClusterBurstTests(unittest.TestCase):
 
     def test_the_readme_regenerates_from_the_runs(self):
         self.assertEqual((self.DIR / "README.md").read_text(), compare.markdown(compare.read(self.DIR)))
+
+
+class KedaClaimTests(unittest.TestCase):
+    """The README's KEDA bullets, number by number."""
+    DOC = compare.read(ROOT / "results" / "keda" / "cluster-burst")
+    MODEL = results.read(ROOT / "results" / "keda" / "model")
+
+    def rows(self, policy):
+        return sorted((r for r in self.DOC["rows"] if r["policy"] == policy), key=lambda r: r["seed"])
+
+    def cluster(self, policy, key):
+        return [r["cluster"][key] for r in self.rows(policy)]
+
+    @staticmethod
+    def pct(values):
+        return ", ".join(f"{v * 100:.1f}%" for v in values[:-1]) + f" and {values[-1] * 100:.1f}%"
+
+    def test_the_prediction_quoted_is_the_model_dataset(self):
+        self.assertIn("on utilization 1.5 points of goodput (42.5% to 44.0%)", FLAT)
+        hpa = statistics.median(r["goodput"] for r in self.MODEL["runs"] if r["policy"] == "hpa-utilization")
+        keda = statistics.median(r["goodput"] for r in self.MODEL["runs"] if r["policy"] == "keda-utilization")
+        self.assertEqual((f"{hpa * 100:.1f}", f"{keda * 100:.1f}", f"{(keda - hpa) * 100:.1f}"), ("42.5", "44.0", "1.5"))
+
+    def test_keda_on_utilization_served_more_in_every_seed_for_more_pods(self):
+        hpa, keda = self.cluster("hpa-utilization", "goodput"), self.cluster("keda-utilization", "goodput")
+        self.assertTrue(all(k > h for h, k in zip(hpa, keda)))
+        self.assertGreater(min(keda), max(hpa))
+        self.assertIn(f"Goodput {statistics.median(keda) * 100:.1f}% against {statistics.median(hpa) * 100:.1f}% "
+                      f"({self.pct(keda)} against {self.pct(hpa)})", FLAT)
+        p50 = [statistics.median(self.cluster(p, "ttft_p50_ms")) / 1000 for p in ("keda-utilization", "hpa-utilization")]
+        self.assertIn(f"the median first token {p50[0]:.1f} s against {p50[1]:.1f} s", FLAT)
+        unhealthy = [statistics.median(self.cluster(p, "unhealthy_s")) for p in ("keda-utilization", "hpa-utilization")]
+        self.assertIn(f"{unhealthy[0]:,.0f} unhealthy seconds against {unhealthy[1]:,.0f}", FLAT)
+        cost_h, cost_k = self.cluster("hpa-utilization", "replica_seconds"), self.cluster("keda-utilization", "replica_seconds")
+        self.assertTrue(all(k > h for h, k in zip(cost_h, cost_k)))
+        ratio = statistics.median(cost_k) / statistics.median(cost_h) - 1
+        self.assertIn(f"at {ratio * 100:.0f}% more replica-seconds ({statistics.median(cost_k):,.0f} against "
+                      f"{statistics.median(cost_h):,.0f}), more in every seed", FLAT)
+
+    def test_the_hpa_is_below_the_sampled_model_and_keda_is_not(self):
+        below = [m - c for c, m in zip(self.cluster("hpa-utilization", "goodput"),
+                                       [r["simulation_scrape"]["goodput"] for r in self.rows("hpa-utilization")])]
+        self.assertTrue(all(b > 0 for b in below))
+        self.assertIn(f"by {min(below) * 100:.1f} to {max(below) * 100:.1f} points", FLAT)
+        keda_gap = [m - c for c, m in zip(self.cluster("keda-utilization", "goodput"),
+                                          [r["simulation_scrape"]["goodput"] for r in self.rows("keda-utilization")])]
+        self.assertLessEqual(max(keda_gap), 0.004)
+        self.assertGreater(max(keda_gap), 0.003)   # 0.39 points on seed 3: "within 0.4", not 0.3
+        self.assertIn("KEDA is above it or within 0.4 points on every seed", FLAT)
+
+    def test_no_difference_held_on_concurrency_and_queue(self):
+        for signal, quoted in (("concurrency", "77.3% against 76.3%"), ("queue", "79.7% against 77.9%")):
+            hpa, keda = self.cluster(f"hpa-{signal}", "goodput"), self.cluster(f"keda-{signal}", "goodput")
+            with self.subTest(signal=signal):
+                self.assertEqual(sum(k < h for h, k in zip(hpa, keda)), 2)
+                self.assertEqual(f"{statistics.median(keda) * 100:.1f}% against {statistics.median(hpa) * 100:.1f}%", quoted)
+                self.assertIn(quoted, FLAT)
+
+    def test_the_hpas_side_repeats_the_first_cluster_dataset_within_a_point(self):
+        first = sorted((r for r in compare.read(ROOT / "results" / "cluster")["rows"] if r["policy"] == "hpa-utilization"),
+                       key=lambda r: r["seed"])
+        now = self.cluster("hpa-utilization", "goodput")
+        then = [r["cluster"]["goodput"] for r in first]
+        self.assertTrue(all(abs(a - b) < 0.01 for a, b in zip(now, then)))
+        self.assertIn(f"served {self.pct(now)} against {self.pct(then)}", FLAT)

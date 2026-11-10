@@ -200,13 +200,34 @@ The seven datasets above were run with one shared queue. [`results/pod-queues`](
 again with a queue per pod, as behind a Service: pod startup is still the biggest lever, but requests in the system no
 longer clearly beat queue depth, standing headroom helps half as much, and a shorter scale-down window saves less.
 
+### KEDA on the same signals
+
+[KEDA](docs/cluster.md#keda-the-other-path) is the other common way to scale on these signals: its operator queries
+Prometheus itself, and the autoscaler it creates reads the sum over the pods as an external metric, with no
+prometheus-adapter. [results/keda/cluster-burst](results/keda/cluster-burst/README.md) runs the burst under the HPA and
+under KEDA on each signal, three seeds each, in one dispatch; each pair has the same signal, target, bounds and window.
+Before it ran, [results/keda/model](results/keda/model/README.md) put on record what the controller's arithmetic alone
+would change: on concurrency nothing, in all eight seeds; on utilization 1.5 points of goodput (42.5% to 44.0%).
+
+- **On utilization KEDA served more requests in time on every seed, for more pods.** Goodput 48.2% against 40.6% (49.2%,
+  47.1% and 48.2% against 40.6%, 39.2% and 43.9%), the median first token 2.7 s against 12.7 s, 860 unhealthy seconds
+  against 1,040, at 7% more replica-seconds (23,975 against 22,500), more in every seed.
+- **Most of that is the path, not the arithmetic.** The HPA through the adapter is below the sampled-pipeline model on
+  every seed, by 2.3 to 5.7 points; KEDA is above it or within 0.4 points on every seed. Some of the delay the cluster
+  added on utilization was prometheus-adapter's. These runs do not say which part of the adapter's path it is.
+- **On concurrency and queue no difference held.** KEDA's goodput was worse in two seeds of three on both (concurrency
+  77.3% against 76.3% at the median, queue 79.7% against 77.9%), as the model said for concurrency.
+- **The HPA's side repeats the first cluster dataset.** `hpa-utilization` served 40.6%, 39.2% and 43.9% against 40.9%,
+  38.4% and 43.3% in [results/cluster](results/cluster/README.md), within a point on every seed, so the gap is not a
+  different day on the runners.
+
 ## Status
 
 The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, a model
 with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points, four ramps that show
 where reactive scaling is enough, all four ramps on the cluster, and a model in which each pod's sample has its own age,
-which places the ramps' utilization flip where the cluster does, are built. Not yet built: KEDA reading the same
-signals; and a predictive policy.
+which places the ramps' utilization flip where the cluster does, and KEDA reading the same signals on the burst, are
+built. Not yet built: a predictive policy.
 
 ## Related projects
 
