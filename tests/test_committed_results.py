@@ -826,3 +826,25 @@ class KedaRampClaimTests(unittest.TestCase):
         above = [a - b for a, b in zip(self.values(self.DOC, "hpa-utilization"), self.values(self.FIRST, "hpa-utilization"))]
         self.assertTrue(all(a > 0 for a in above))
         self.assertIn(f"{min(above) * 100:.1f} to {max(above) * 100:.1f} points above the committed ramp's on each seed", FLAT)
+
+
+class KedaThreeWayTests(unittest.TestCase):
+    """results/keda/cluster-burst-utilization: the HPA, the external HPA and KEDA on utilization, the burst again."""
+    DIR = ROOT / "results" / "keda" / "cluster-burst-utilization"
+
+    def test_the_three_paths_ran_on_the_same_three_seeds_as_the_first_dispatch(self):
+        doc = compare.read(self.DIR)
+        self.assertEqual(sorted((r["policy"], r["seed"]) for r in doc["rows"]),
+                         sorted((f"{path}-utilization", seed) for path in ("hpa", "external", "keda") for seed in (1, 2, 3)))
+        first = compare.read(ROOT / "results" / "keda" / "cluster-burst")
+        self.assertEqual({json_config(r) for r in doc["rows"]}, {json_config(r) for r in first["rows"]})
+
+    def test_the_readme_regenerates_and_sets_every_path_against_the_others(self):
+        text = (self.DIR / "README.md").read_text()
+        self.assertEqual(text, compare.markdown(compare.read(self.DIR)))
+        for title in ("KEDA against the HPA", "The external HPA against the HPA", "KEDA against the external HPA"):
+            self.assertIn(f"### {title}, on the cluster", text)
+
+
+def json_config(row):
+    return tuple(sorted(row["config"].items()))
