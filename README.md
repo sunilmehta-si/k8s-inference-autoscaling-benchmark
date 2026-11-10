@@ -209,30 +209,37 @@ under KEDA on each signal, three seeds each, in one dispatch; each pair has the 
 Before it ran, [results/keda/model](results/keda/model/README.md) put on record what the controller's arithmetic alone
 would change: on concurrency nothing, in all eight seeds; on utilization 1.5 points of goodput (42.5% to 44.0%).
 
-- **On utilization KEDA served more requests in time on every seed, for more pods.** Goodput 48.2% against 40.6% (49.2%,
-  47.1% and 48.2% against 40.6%, 39.2% and 43.9%), the median first token 2.7 s against 12.7 s, 860 unhealthy seconds
-  against 1,040, at 7% more replica-seconds (23,975 against 22,500), more in every seed.
-- **On the burst most of that is the path, not the arithmetic.** The HPA through the adapter is below the
-  sampled-pipeline model on every seed, by 2.3 to 5.7 points; KEDA is above it or within 0.4 points on every seed.
-  These runs do not say which part of the adapter's path it would be.
+- **The first dispatch put KEDA ahead on utilization on every seed.** Goodput 48.2% against 40.6% (49.2%, 47.1% and
+  48.2% against 40.6%, 39.2% and 43.9%), the median first token 2.7 s against 12.7 s, 860 unhealthy seconds against
+  1,040, at 7% more replica-seconds (23,975 against 22,500), more in every seed.
+- **The same seeds again put KEDA behind on every seed.** A second dispatch,
+  [results/keda/cluster-burst-utilization](results/keda/cluster-burst-utilization/README.md), ran the same three seeds
+  and settings with a third path beside the two: the HPA reading the same sum from the adapter as an external metric,
+  KEDA's arithmetic on the adapter's path. KEDA served 41.3% against the HPA's 43.4% at the median, below it on every
+  seed, and the external HPA 44.0%. Between the two dispatches KEDA's own runs moved by 3.0 to 7.9 points, as much as
+  the gap that first appeared.
+- **So no difference between the paths holds on utilization.** Over both dispatches, six runs each, KEDA's median is
+  45.6% and the HPA's 42.4%, with KEDA ahead on every seed once and behind on every seed once. The model's 1.5 points
+  are within that spread; three seeds of one dispatch were not enough to see past it, and the first dispatch's reading
+  that the path made the difference does not stand.
 - **On concurrency and queue no difference held.** KEDA's goodput was worse in two seeds of three on both (concurrency
   77.3% against 76.3% at the median, queue 79.7% against 77.9%), as the model said for concurrency.
-- **On the 30 s ramp the gain did not repeat.** In [results/keda/cluster-ramp-30](results/keda/cluster-ramp-30/README.md)
+- **On the 30 s ramp KEDA was behind on utilization too.** In [results/keda/cluster-ramp-30](results/keda/cluster-ramp-30/README.md)
   KEDA on utilization was worse on every seed (41.0% against 46.4% at the median), by 0.3, 7.5 and 1.3 points. On
   concurrency it was better on two seeds of three (75.8% against 73.8%) and used fewer replica-seconds on all three. The
   HPA's own utilization runs there were 2.1 to 5.0 points above the committed ramp's on each seed, so three seeds of a
   signal this noisy do not settle it either way.
-- **The HPA's side repeats the first cluster dataset.** `hpa-utilization` served 40.6%, 39.2% and 43.9% against 40.9%,
-  38.4% and 43.3% in [results/cluster](results/cluster/README.md), within a point on every seed, so the gap is not a
-  different day on the runners.
+- **The HPA's side of the first dispatch repeats the first cluster dataset.** `hpa-utilization` served 40.6%, 39.2% and
+  43.9% against 40.9%, 38.4% and 43.3% in [results/cluster](results/cluster/README.md), within a point on every seed. The
+  second dispatch moved it by up to 6.6 points on seed 2, so a match on one dispatch is not a measure of the spread.
 
 ## Status
 
 The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, a model
 with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points, four ramps that show
 where reactive scaling is enough, all four ramps on the cluster, and a model in which each pod's sample has its own age,
-which places the ramps' utilization flip where the cluster does, and KEDA reading the same signals on the burst, are
-built. Not yet built: a predictive policy.
+which places the ramps' utilization flip where the cluster does, and KEDA and the external HPA reading the same signals,
+are built. Not yet built: a predictive policy.
 
 ## Related projects
 

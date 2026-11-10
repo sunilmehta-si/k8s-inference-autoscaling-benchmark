@@ -755,17 +755,6 @@ class KedaClaimTests(unittest.TestCase):
         self.assertIn(f"at {ratio * 100:.0f}% more replica-seconds ({statistics.median(cost_k):,.0f} against "
                       f"{statistics.median(cost_h):,.0f}), more in every seed", FLAT)
 
-    def test_the_hpa_is_below_the_sampled_model_and_keda_is_not(self):
-        below = [m - c for c, m in zip(self.cluster("hpa-utilization", "goodput"),
-                                       [r["simulation_scrape"]["goodput"] for r in self.rows("hpa-utilization")])]
-        self.assertTrue(all(b > 0 for b in below))
-        self.assertIn(f"by {min(below) * 100:.1f} to {max(below) * 100:.1f} points", FLAT)
-        keda_gap = [m - c for c, m in zip(self.cluster("keda-utilization", "goodput"),
-                                          [r["simulation_scrape"]["goodput"] for r in self.rows("keda-utilization")])]
-        self.assertLessEqual(max(keda_gap), 0.004)
-        self.assertGreater(max(keda_gap), 0.003)   # 0.39 points on seed 3: "within 0.4", not 0.3
-        self.assertIn("KEDA is above it or within 0.4 points on every seed", FLAT)
-
     def test_no_difference_held_on_concurrency_and_queue(self):
         for signal, quoted in (("concurrency", "77.3% against 76.3%"), ("queue", "79.7% against 77.9%")):
             hpa, keda = self.cluster(f"hpa-{signal}", "goodput"), self.cluster(f"keda-{signal}", "goodput")
@@ -781,6 +770,11 @@ class KedaClaimTests(unittest.TestCase):
         then = [r["cluster"]["goodput"] for r in first]
         self.assertTrue(all(abs(a - b) < 0.01 for a, b in zip(now, then)))
         self.assertIn(f"served {self.pct(now)} against {self.pct(then)}", FLAT)
+        second = [r["cluster"]["goodput"] for r in sorted(compare.read(ROOT / "results" / "keda" / "cluster-burst-utilization")["rows"],
+                                                           key=lambda r: r["seed"]) if r["policy"] == "hpa-utilization"]
+        moved = [abs(a - b) for a, b in zip(now, second)]
+        self.assertEqual(moved.index(max(moved)), 1)   # seed 2
+        self.assertIn(f"moved it by up to {max(moved) * 100:.1f} points on seed 2", FLAT)
 
 
 class KedaClusterRampTests(unittest.TestCase):
@@ -848,3 +842,35 @@ class KedaThreeWayTests(unittest.TestCase):
 
 def json_config(row):
     return tuple(sorted(row["config"].items()))
+
+
+class KedaSecondDispatchClaimTests(unittest.TestCase):
+    """The README's bullets on the second burst dispatch and the two dispatches together."""
+    FIRST = compare.read(ROOT / "results" / "keda" / "cluster-burst")
+    SECOND = compare.read(ROOT / "results" / "keda" / "cluster-burst-utilization")
+
+    @staticmethod
+    def goodput(doc, policy):
+        return [r["cluster"]["goodput"] for r in sorted(doc["rows"], key=lambda r: r["seed"]) if r["policy"] == policy]
+
+    def test_keda_was_behind_on_every_seed_the_second_time(self):
+        hpa, keda = self.goodput(self.SECOND, "hpa-utilization"), self.goodput(self.SECOND, "keda-utilization")
+        external = self.goodput(self.SECOND, "external-utilization")
+        self.assertTrue(all(k < h for h, k in zip(hpa, keda)))
+        self.assertIn(f"KEDA served {statistics.median(keda) * 100:.1f}% against the HPA's {statistics.median(hpa) * 100:.1f}% "
+                      f"at the median, below it on every seed, and the external HPA {statistics.median(external) * 100:.1f}%", FLAT)
+
+    def test_keda_moved_between_dispatches_as_much_as_the_first_gap(self):
+        moved = [abs(a - b) for a, b in zip(self.goodput(self.FIRST, "keda-utilization"), self.goodput(self.SECOND, "keda-utilization"))]
+        self.assertIn(f"KEDA's own runs moved by {min(moved) * 100:.1f} to {max(moved) * 100:.1f} points", FLAT)
+        gap = statistics.median(self.goodput(self.FIRST, "keda-utilization")) - statistics.median(self.goodput(self.FIRST, "hpa-utilization"))
+        self.assertGreater(max(moved), gap)
+
+    def test_over_both_dispatches_keda_led_on_every_seed_once_and_trailed_on_every_seed_once(self):
+        both = {p: self.goodput(self.FIRST, p) + self.goodput(self.SECOND, p) for p in ("hpa-utilization", "keda-utilization")}
+        self.assertIn(f"KEDA's median is {statistics.median(both['keda-utilization']) * 100:.1f}% and the HPA's "
+                      f"{statistics.median(both['hpa-utilization']) * 100:.1f}%", FLAT)
+        first = [k > h for h, k in zip(self.goodput(self.FIRST, "hpa-utilization"), self.goodput(self.FIRST, "keda-utilization"))]
+        second = [k > h for h, k in zip(self.goodput(self.SECOND, "hpa-utilization"), self.goodput(self.SECOND, "keda-utilization"))]
+        self.assertEqual((first, second), ([True] * 3, [False] * 3))
+        self.assertNotIn("most of that is the path", FLAT)
