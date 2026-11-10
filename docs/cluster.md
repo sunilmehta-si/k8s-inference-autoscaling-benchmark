@@ -57,9 +57,10 @@ and differ in one seed on queue and three on utilization, by little. A differenc
 [`results/keda/cluster-burst`](../results/keda/cluster-burst/README.md) is what the cluster said. On concurrency and queue
 no difference held. On utilization KEDA served more in time on every seed, by 7.5 points of goodput at the median, five
 times the model's prediction, and the HPA through the adapter sits below the sampled-pipeline model on every seed where
-KEDA does not. Part of the delay the cluster adds on utilization is therefore the adapter's: which part (its own query,
-its discovery of new pods' series, or the controller's handling of pods it has no sample for) is the next thing to take
-apart.
+KEDA does not. On the 30 s ramp ([`results/keda/cluster-ramp-30`](../results/keda/cluster-ramp-30/README.md)) the gain did
+not repeat: KEDA on utilization was worse on every seed, two of them by little. So either part of the delay on the
+burst is the adapter's (its own query, its discovery of new pods' series, or the controller's handling of pods it has
+no sample for), or three seeds of utilization are too few to tell, and both are worth taking apart.
 
 An `external-` policy takes it apart. It is the HPA reading the signal's sum from prometheus-adapter as an external
 metric (`deploy/hpa-external/`, with the adapter's `externalRules` and [`deploy/adapter-external.yaml`](../deploy/adapter-external.yaml)
