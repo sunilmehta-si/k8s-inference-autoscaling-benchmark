@@ -4,7 +4,7 @@ import statistics
 import unittest
 from pathlib import Path
 
-from inference_autoscaling_bench import metrics, report, results, sim, spec, workload
+from inference_autoscaling_bench import compare, metrics, report, results, sim, spec, workload
 from inference_autoscaling_bench.policies import Bounds
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -657,3 +657,220 @@ class SampledPipelineTests(unittest.TestCase):
         for i, ramp in enumerate(self.RAMPS):
             with self.subTest(ramp=ramp):
                 self.assertLess(abs(lag[i] - cluster[i]), abs(scrape[i] - cluster[i]))
+
+
+class KedaModelTests(unittest.TestCase):
+    """results/keda/model: the HPA and KEDA on each signal in the model, committed before the cluster ran them."""
+    DIR = ROOT / "results" / "keda" / "model"
+
+    def test_it_is_what_the_makefile_builds_and_its_report_and_chart_regenerate(self):
+        self.assertIn("--out results/keda/model", (ROOT / "Makefile").read_text())
+        doc = results.read(self.DIR)
+        self.assertEqual((self.DIR / "README.md").read_text(), report.markdown(doc))
+        self.assertEqual((self.DIR / "chart.svg").read_text(), __import__("inference_autoscaling_bench.chart", fromlist=["svg"]).svg(doc))
+
+    def test_every_signal_runs_both_ways_on_eight_seeds_with_the_cluster_pipeline(self):
+        doc = results.read(self.DIR)
+        for signal in ("concurrency", "queue", "utilization"):
+            for scaler in ("hpa", "keda"):
+                with self.subTest(policy=f"{scaler}-{signal}"):
+                    text = next(p["text"] for p in doc["policies"] if p["label"] == f"{scaler}-{signal}")
+                    self.assertEqual(text, f"{scaler}-{signal}={scaler}-{signal}:route=pod,scrape=15")
+                    self.assertEqual(sorted(r["seed"] for r in doc["runs"] if r["policy"] == f"{scaler}-{signal}"), list(range(1, 9)))
+
+    def test_the_first_run_of_every_policy_is_reproduced_from_its_spec(self):
+        from inference_autoscaling_bench.experiment import run_matrix
+        doc = results.read(self.DIR)
+        w = workload.load(ROOT / "workloads" / "burst.json")
+        for policy in doc["policies"]:
+            with self.subTest(policy=policy["label"]):
+                rows, _ = run_matrix(w, [spec.parse(policy["text"])], [1], Bounds(policy["min_replicas"], doc["bounds"]["max_replicas"]))
+                saved = next(r for r in doc["runs"] if r["policy"] == policy["label"] and r["seed"] == 1)
+                for key, value in rows[0].items():
+                    if key not in ("policy", "seed"):
+                        self.assertAlmostEqual(saved[key], value, delta=abs(value) * 1e-9 + 1e-9, msg=key)
+
+    def test_the_model_predicts_the_same_decisions_on_concurrency_and_few_differences_elsewhere(self):
+        doc = results.read(self.DIR)
+        def runs(policy):
+            return {r["seed"]: r for r in doc["runs"] if r["policy"] == policy}
+        differ = {}
+        for signal in ("concurrency", "queue", "utilization"):
+            hpa, keda = runs(f"hpa-{signal}"), runs(f"keda-{signal}")
+            differ[signal] = sum(hpa[s]["replica_seconds"] != keda[s]["replica_seconds"] for s in hpa)
+        self.assertEqual(differ, {"concurrency": 0, "queue": 1, "utilization": 3})
+
+
+class KedaClusterBurstTests(unittest.TestCase):
+    """results/keda/cluster-burst: the HPA and KEDA on each signal on the cluster, one dispatch, three seeds each."""
+    DIR = ROOT / "results" / "keda" / "cluster-burst"
+
+    def test_every_signal_ran_both_ways_on_the_same_three_seeds(self):
+        doc = compare.read(self.DIR)
+        self.assertEqual(sorted((r["policy"], r["seed"]) for r in doc["rows"]),
+                         sorted((f"{scaler}-{signal}", seed) for scaler in ("hpa", "keda")
+                                for signal in ("concurrency", "queue", "utilization") for seed in (1, 2, 3)))
+        for row in doc["rows"]:
+            self.assertEqual(row["config"], {"startup_s": 45.0, "min_replicas": 2, "max_replicas": 32, "down_window_s": 300.0,
+                                             "workload": "burst"})
+
+    def test_the_readme_regenerates_from_the_runs(self):
+        self.assertEqual((self.DIR / "README.md").read_text(), compare.markdown(compare.read(self.DIR)))
+
+
+class KedaClaimTests(unittest.TestCase):
+    """The README's KEDA bullets, number by number."""
+    DOC = compare.read(ROOT / "results" / "keda" / "cluster-burst")
+    MODEL = results.read(ROOT / "results" / "keda" / "model")
+
+    def rows(self, policy):
+        return sorted((r for r in self.DOC["rows"] if r["policy"] == policy), key=lambda r: r["seed"])
+
+    def cluster(self, policy, key):
+        return [r["cluster"][key] for r in self.rows(policy)]
+
+    @staticmethod
+    def pct(values):
+        return ", ".join(f"{v * 100:.1f}%" for v in values[:-1]) + f" and {values[-1] * 100:.1f}%"
+
+    def test_the_prediction_quoted_is_the_model_dataset(self):
+        self.assertIn("on utilization 1.5 points of goodput (42.5% to 44.0%)", FLAT)
+        hpa = statistics.median(r["goodput"] for r in self.MODEL["runs"] if r["policy"] == "hpa-utilization")
+        keda = statistics.median(r["goodput"] for r in self.MODEL["runs"] if r["policy"] == "keda-utilization")
+        self.assertEqual((f"{hpa * 100:.1f}", f"{keda * 100:.1f}", f"{(keda - hpa) * 100:.1f}"), ("42.5", "44.0", "1.5"))
+
+    def test_keda_on_utilization_served_more_in_every_seed_for_more_pods(self):
+        hpa, keda = self.cluster("hpa-utilization", "goodput"), self.cluster("keda-utilization", "goodput")
+        self.assertTrue(all(k > h for h, k in zip(hpa, keda)))
+        self.assertGreater(min(keda), max(hpa))
+        self.assertIn(f"Goodput {statistics.median(keda) * 100:.1f}% against {statistics.median(hpa) * 100:.1f}% "
+                      f"({self.pct(keda)} against {self.pct(hpa)})", FLAT)
+        p50 = [statistics.median(self.cluster(p, "ttft_p50_ms")) / 1000 for p in ("keda-utilization", "hpa-utilization")]
+        self.assertIn(f"the median first token {p50[0]:.1f} s against {p50[1]:.1f} s", FLAT)
+        unhealthy = [statistics.median(self.cluster(p, "unhealthy_s")) for p in ("keda-utilization", "hpa-utilization")]
+        self.assertIn(f"{unhealthy[0]:,.0f} unhealthy seconds against {unhealthy[1]:,.0f}", FLAT)
+        cost_h, cost_k = self.cluster("hpa-utilization", "replica_seconds"), self.cluster("keda-utilization", "replica_seconds")
+        self.assertTrue(all(k > h for h, k in zip(cost_h, cost_k)))
+        ratio = statistics.median(cost_k) / statistics.median(cost_h) - 1
+        self.assertIn(f"at {ratio * 100:.0f}% more replica-seconds ({statistics.median(cost_k):,.0f} against "
+                      f"{statistics.median(cost_h):,.0f}), more in every seed", FLAT)
+
+    def test_no_difference_held_on_concurrency_and_queue(self):
+        for signal, quoted in (("concurrency", "77.3% against 76.3%"), ("queue", "79.7% against 77.9%")):
+            hpa, keda = self.cluster(f"hpa-{signal}", "goodput"), self.cluster(f"keda-{signal}", "goodput")
+            with self.subTest(signal=signal):
+                self.assertEqual(sum(k < h for h, k in zip(hpa, keda)), 2)
+                self.assertEqual(f"{statistics.median(keda) * 100:.1f}% against {statistics.median(hpa) * 100:.1f}%", quoted)
+                self.assertIn(quoted, FLAT)
+
+    def test_the_hpas_side_repeats_the_first_cluster_dataset_within_a_point(self):
+        first = sorted((r for r in compare.read(ROOT / "results" / "cluster")["rows"] if r["policy"] == "hpa-utilization"),
+                       key=lambda r: r["seed"])
+        now = self.cluster("hpa-utilization", "goodput")
+        then = [r["cluster"]["goodput"] for r in first]
+        self.assertTrue(all(abs(a - b) < 0.01 for a, b in zip(now, then)))
+        self.assertIn(f"served {self.pct(now)} against {self.pct(then)}", FLAT)
+        second = [r["cluster"]["goodput"] for r in sorted(compare.read(ROOT / "results" / "keda" / "cluster-burst-utilization")["rows"],
+                                                           key=lambda r: r["seed"]) if r["policy"] == "hpa-utilization"]
+        moved = [abs(a - b) for a, b in zip(now, second)]
+        self.assertEqual(moved.index(max(moved)), 1)   # seed 2
+        self.assertIn(f"moved it by up to {max(moved) * 100:.1f} points on seed 2", FLAT)
+
+
+class KedaClusterRampTests(unittest.TestCase):
+    """results/keda/cluster-ramp-30: the HPA and KEDA on concurrency and utilization on the 30 s ramp, three seeds each."""
+    DIR = ROOT / "results" / "keda" / "cluster-ramp-30"
+
+    def test_both_signals_ran_both_ways_on_the_same_three_seeds(self):
+        doc = compare.read(self.DIR)
+        self.assertEqual(sorted((r["policy"], r["seed"]) for r in doc["rows"]),
+                         sorted((f"{scaler}-{signal}", seed) for scaler in ("hpa", "keda")
+                                for signal in ("concurrency", "utilization") for seed in (1, 2, 3)))
+        self.assertEqual({r["config"]["workload"] for r in doc["rows"]}, {"ramp-30"})
+
+    def test_the_readme_regenerates_from_the_runs(self):
+        self.assertEqual((self.DIR / "README.md").read_text(), compare.markdown(compare.read(self.DIR)))
+
+
+class KedaRampClaimTests(unittest.TestCase):
+    """The README's 30 s ramp bullet in the KEDA section, number by number."""
+    DOC = compare.read(ROOT / "results" / "keda" / "cluster-ramp-30")
+    FIRST = compare.read(ROOT / "results" / "cluster-ramps" / "ramp-30")
+
+    @staticmethod
+    def values(doc, policy, key="goodput"):
+        return [r["cluster"][key] for r in sorted(doc["rows"], key=lambda r: r["seed"]) if r["policy"] == policy]
+
+    def test_keda_on_utilization_was_worse_on_every_seed_by_the_quoted_points(self):
+        hpa, keda = self.values(self.DOC, "hpa-utilization"), self.values(self.DOC, "keda-utilization")
+        gaps = [h - k for h, k in zip(hpa, keda)]
+        self.assertTrue(all(g > 0 for g in gaps))
+        self.assertIn(f"({statistics.median(keda) * 100:.1f}% against {statistics.median(hpa) * 100:.1f}% at the median), by "
+                      f"{gaps[0] * 100:.1f}, {gaps[1] * 100:.1f} and {gaps[2] * 100:.1f} points", FLAT)
+
+    def test_on_concurrency_keda_was_better_on_two_seeds_and_cheaper_on_all(self):
+        hpa, keda = self.values(self.DOC, "hpa-concurrency"), self.values(self.DOC, "keda-concurrency")
+        self.assertEqual(sum(k > h for h, k in zip(hpa, keda)), 2)
+        self.assertIn(f"better on two seeds of three ({statistics.median(keda) * 100:.1f}% against "
+                      f"{statistics.median(hpa) * 100:.1f}%)", FLAT)
+        cost_h, cost_k = self.values(self.DOC, "hpa-concurrency", "replica_seconds"), self.values(self.DOC, "keda-concurrency", "replica_seconds")
+        self.assertTrue(all(k < h for h, k in zip(cost_h, cost_k)))
+
+    def test_the_hpas_utilization_runs_were_above_the_committed_ramps_on_every_seed(self):
+        above = [a - b for a, b in zip(self.values(self.DOC, "hpa-utilization"), self.values(self.FIRST, "hpa-utilization"))]
+        self.assertTrue(all(a > 0 for a in above))
+        self.assertIn(f"{min(above) * 100:.1f} to {max(above) * 100:.1f} points above the committed ramp's on each seed", FLAT)
+
+
+class KedaThreeWayTests(unittest.TestCase):
+    """results/keda/cluster-burst-utilization: the HPA, the external HPA and KEDA on utilization, the burst again."""
+    DIR = ROOT / "results" / "keda" / "cluster-burst-utilization"
+
+    def test_the_three_paths_ran_on_the_same_three_seeds_as_the_first_dispatch(self):
+        doc = compare.read(self.DIR)
+        self.assertEqual(sorted((r["policy"], r["seed"]) for r in doc["rows"]),
+                         sorted((f"{path}-utilization", seed) for path in ("hpa", "external", "keda") for seed in (1, 2, 3)))
+        first = compare.read(ROOT / "results" / "keda" / "cluster-burst")
+        self.assertEqual({json_config(r) for r in doc["rows"]}, {json_config(r) for r in first["rows"]})
+
+    def test_the_readme_regenerates_and_sets_every_path_against_the_others(self):
+        text = (self.DIR / "README.md").read_text()
+        self.assertEqual(text, compare.markdown(compare.read(self.DIR)))
+        for title in ("KEDA against the HPA", "The external HPA against the HPA", "KEDA against the external HPA"):
+            self.assertIn(f"### {title}, on the cluster", text)
+
+
+def json_config(row):
+    return tuple(sorted(row["config"].items()))
+
+
+class KedaSecondDispatchClaimTests(unittest.TestCase):
+    """The README's bullets on the second burst dispatch and the two dispatches together."""
+    FIRST = compare.read(ROOT / "results" / "keda" / "cluster-burst")
+    SECOND = compare.read(ROOT / "results" / "keda" / "cluster-burst-utilization")
+
+    @staticmethod
+    def goodput(doc, policy):
+        return [r["cluster"]["goodput"] for r in sorted(doc["rows"], key=lambda r: r["seed"]) if r["policy"] == policy]
+
+    def test_keda_was_behind_on_every_seed_the_second_time(self):
+        hpa, keda = self.goodput(self.SECOND, "hpa-utilization"), self.goodput(self.SECOND, "keda-utilization")
+        external = self.goodput(self.SECOND, "external-utilization")
+        self.assertTrue(all(k < h for h, k in zip(hpa, keda)))
+        self.assertIn(f"KEDA served {statistics.median(keda) * 100:.1f}% against the HPA's {statistics.median(hpa) * 100:.1f}% "
+                      f"at the median, below it on every seed, and the external HPA {statistics.median(external) * 100:.1f}%", FLAT)
+
+    def test_keda_moved_between_dispatches_as_much_as_the_first_gap(self):
+        moved = [abs(a - b) for a, b in zip(self.goodput(self.FIRST, "keda-utilization"), self.goodput(self.SECOND, "keda-utilization"))]
+        self.assertIn(f"KEDA's own runs moved by {min(moved) * 100:.1f} to {max(moved) * 100:.1f} points", FLAT)
+        gap = statistics.median(self.goodput(self.FIRST, "keda-utilization")) - statistics.median(self.goodput(self.FIRST, "hpa-utilization"))
+        self.assertGreater(max(moved), gap)
+
+    def test_over_both_dispatches_keda_led_on_every_seed_once_and_trailed_on_every_seed_once(self):
+        both = {p: self.goodput(self.FIRST, p) + self.goodput(self.SECOND, p) for p in ("hpa-utilization", "keda-utilization")}
+        self.assertIn(f"KEDA's median is {statistics.median(both['keda-utilization']) * 100:.1f}% and the HPA's "
+                      f"{statistics.median(both['hpa-utilization']) * 100:.1f}%", FLAT)
+        first = [k > h for h, k in zip(self.goodput(self.FIRST, "hpa-utilization"), self.goodput(self.FIRST, "keda-utilization"))]
+        second = [k > h for h, k in zip(self.goodput(self.SECOND, "hpa-utilization"), self.goodput(self.SECOND, "keda-utilization"))]
+        self.assertEqual((first, second), ([True] * 3, [False] * 3))
+        self.assertNotIn("most of that is the path", FLAT)

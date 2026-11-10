@@ -57,6 +57,28 @@ class ParseTests(unittest.TestCase):
                 spec.parse(bad)
 
 
+
+class KedaSpecTests(unittest.TestCase):
+    def test_keda_is_the_hpa_reading_an_external_metric(self):
+        policy = spec.parse("keda-concurrency").make()
+        self.assertIsInstance(policy, Hpa)
+        self.assertEqual((policy.signal, policy.target, policy.external, policy.name), ("concurrency", 6.0, True, "keda-concurrency"))
+        self.assertFalse(spec.parse("hpa-concurrency").make().external)
+
+    def test_keda_takes_the_hpas_options(self):
+        s = spec.parse("keda-queue:down=60,startup=20,route=pod,scrape=15")
+        policy = s.make()
+        self.assertEqual((policy.down_window_s, s.replica.startup_s, s.pod_queues, s.scrape_s), (60.0, 20.0, True, 15.0))
+
+    def test_external_is_the_same_controller_as_keda_under_its_own_label(self):
+        external, keda = spec.parse("external-utilization").make(), spec.parse("keda-utilization").make()
+        self.assertEqual((external.signal, external.target, external.external, external.name), ("utilization", 0.6, True, "external-utilization"))
+        self.assertEqual((keda.signal, keda.target, keda.external), (external.signal, external.target, external.external))
+
+    def test_an_unknown_keda_signal_is_refused(self):
+        with self.assertRaisesRegex(ValueError, r"keda-<"):
+            spec.parse("keda-gpu")
+
 class MatrixTests(unittest.TestCase):
     def test_every_policy_runs_on_every_seed_and_shares_the_trace(self):
         w = tiny_workload()

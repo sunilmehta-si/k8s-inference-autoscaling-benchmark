@@ -50,6 +50,33 @@ class StartingPodsTests(unittest.TestCase):
         self.assertEqual(Hpa("concurrency").decide(obs(ready=10, pending=2, running=30), BOUNDS), 5)
 
 
+
+class ExternalMetricTests(unittest.TestCase):
+    """KEDA's autoscaler reads the sum over the pods as an external metric with a target per pod."""
+
+    def test_away_from_starting_pods_it_decides_as_the_pods_metric_does(self):
+        for o in (obs(running=24), obs(running=25), obs(running=32, queued=4), obs(ready=10, running=30), obs(queued=8)):
+            with self.subTest(obs=o):
+                self.assertEqual(Hpa("concurrency", external=True).decide(o, BOUNDS), Hpa("concurrency").decide(o, BOUNDS))
+
+    def test_starting_pods_count_in_the_average_before_the_tolerance(self):
+        # 27 requests on 4 ready pods is 1.125 of the target, outside the tolerance; with the 2 starting pods counted the
+        # pods' metric crosses 1 and holds at 6. The external metric averages over all 6 from the start (0.75) and
+        # recommends ceil(27 / 6) = 5, which the scale-down window then holds off.
+        self.assertEqual(Hpa("concurrency").decide(obs(ready=4, pending=2, running=27), BOUNDS), 6)
+        self.assertEqual(Hpa("concurrency", external=True).decide(obs(ready=4, pending=2, running=27), BOUNDS), 5)
+
+    def test_a_surge_asks_for_the_sum_over_the_target(self):
+        self.assertEqual(Hpa("concurrency", external=True).decide(obs(ready=4, pending=2, running=60), BOUNDS), 10)
+
+    def test_no_ready_pod_is_needed_for_a_decision(self):
+        # The pods' metric has no value without a ready pod; the sum KEDA reads is there regardless.
+        self.assertIsNone(Hpa("concurrency").decide(obs(ready=0, pending=3, queued=50), BOUNDS))
+        self.assertEqual(Hpa("concurrency", external=True).decide(obs(ready=0, pending=3, queued=50), BOUNDS), 7)
+
+    def test_it_is_named_for_keda(self):
+        self.assertEqual(Hpa("queue", external=True).name, "keda-queue")
+
 class LimitTests(unittest.TestCase):
     def test_scaling_up_is_limited_to_four_pods_or_doubling(self):
         self.assertEqual(Hpa("concurrency").decide(obs(ready=2, running=200), BOUNDS), 6)      # max(2 + 4, 2 * 2)

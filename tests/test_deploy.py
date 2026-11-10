@@ -25,7 +25,8 @@ def versions() -> dict:
 class PinTests(unittest.TestCase):
     def test_every_image_is_pinned_by_digest(self):
         v = versions()
-        for key in ("KIND_NODE_IMAGE", "SIM_IMAGE", "PROMETHEUS_IMAGE", "PROMETHEUS_ADAPTER_IMAGE", "PYTHON_IMAGE"):
+        for key in ("KIND_NODE_IMAGE", "SIM_IMAGE", "PROMETHEUS_IMAGE", "PROMETHEUS_ADAPTER_IMAGE", "PYTHON_IMAGE", "KEDA_IMAGE",
+                    "KEDA_METRICS_APISERVER_IMAGE", "KEDA_ADMISSION_WEBHOOKS_IMAGE"):
             with self.subTest(image=key):
                 self.assertRegex(v[key], r"@sha256:[0-9a-f]{64}$")
 
@@ -33,9 +34,14 @@ class PinTests(unittest.TestCase):
         v = versions()
         self.assertIn(f":{v['PROMETHEUS_VERSION']}@", v["PROMETHEUS_IMAGE"])
         self.assertIn(f":{v['PROMETHEUS_ADAPTER_VERSION']}@", v["PROMETHEUS_ADAPTER_IMAGE"])
+        for key in ("KEDA_IMAGE", "KEDA_METRICS_APISERVER_IMAGE", "KEDA_ADMISSION_WEBHOOKS_IMAGE"):
+            with self.subTest(image=key):   # KEDA tags its images without the v its releases carry
+                self.assertIn(f":{v['KEDA_VERSION'].removeprefix('v')}@", v[key])
 
-    def test_the_downloaded_binary_has_a_checksum(self):
-        self.assertRegex(versions()["KIND_SHA256_LINUX_AMD64"], r"^[0-9a-f]{64}$")
+    def test_every_download_has_a_checksum(self):
+        for key in ("KIND_SHA256_LINUX_AMD64", "KEDA_MANIFEST_SHA256"):
+            with self.subTest(download=key):
+                self.assertRegex(versions()[key], r"^[0-9a-f]{64}$")
 
     def test_the_dockerfile_takes_its_base_from_the_pin(self):
         text = (ROOT / "Dockerfile").read_text()
@@ -67,6 +73,16 @@ class PinTests(unittest.TestCase):
             hpa |= set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", path.read_text()))
         listed = set(re.findall(r"\$\{([A-Z_]+)\}", re.search(r"envsubst '([^']*)'", (SCRIPTS / "apply-hpa.sh").read_text()).group(1)))
         self.assertEqual(hpa, listed)
+        keda = set()
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            keda |= set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", path.read_text()))
+        listed = set(re.findall(r"\$\{([A-Z_]+)\}", re.search(r"envsubst '([^']*)'", (SCRIPTS / "apply-keda.sh").read_text()).group(1)))
+        self.assertEqual(keda, listed)
+
+    def test_keda_gets_the_same_defaults_as_the_hpa(self):
+        def defaults(script):
+            return re.search(r"export (MIN_REPLICAS=.*)", (SCRIPTS / script).read_text()).group(1)
+        self.assertEqual(defaults("apply-keda.sh"), defaults("apply-hpa.sh"))
 
     def test_every_variable_substituted_is_defined_by_the_versions_or_the_script(self):
         v = versions()
@@ -171,6 +187,155 @@ class ManifestTests(unittest.TestCase):
                 with self.subTest(signal=signal):
                     self.assertEqual(value, expected[signal])
                     self.assertEqual(float(target), 0.6 if signal == "utilization" else float(expected[signal]))
+
+
+class KedaTests(unittest.TestCase):
+    """KEDA must scale on exactly what the HPA scales on, so a difference between them is the path, not the policy."""
+
+    def test_every_signal_has_a_scaled_object_beside_its_hpa(self):
+        self.assertEqual(sorted(p.name for p in (DEPLOY / "keda").glob("*.yaml")),
+                         sorted(p.name for p in (DEPLOY / "hpa").glob("*.yaml")))
+
+    def test_keda_sums_the_series_prometheus_records_for_its_signal(self):
+        recorded = set(re.findall(r"record: iab_(\w+)", (DEPLOY / "monitoring.yaml").read_text()))
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            query = re.search(r"query: (.+)", path.read_text()).group(1)
+            with self.subTest(file=path.name):
+                self.assertEqual(query, f'sum(iab_{path.stem}{{namespace="iab"}})')
+                self.assertIn(path.stem, recorded)
+
+    def test_keda_targets_the_hpas_value_as_an_average_per_pod(self):
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            text = path.read_text()
+            hpa = re.search(r'averageValue: "?([\w.]+)"?', (DEPLOY / "hpa" / path.name).read_text()).group(1)
+            hpa_value = float(hpa[:-1]) / 1000 if hpa.endswith("m") else float(hpa)
+            with self.subTest(file=path.name):
+                self.assertIn("metricType: AverageValue", text)
+                self.assertEqual(float(re.search(r'threshold: "([\d.]+)"', text).group(1)), hpa_value)
+
+    def test_keda_has_the_hpas_bounds_and_scale_down_window(self):
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            text = path.read_text()
+            with self.subTest(file=path.name):
+                for setting in ("minReplicaCount: ${MIN_REPLICAS}", "maxReplicaCount: ${MAX_REPLICAS}",
+                                "scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}", "scaleTargetRef: {name: sim}"):
+                    self.assertIn(setting, text)
+
+    def test_keda_is_installed_from_the_pinned_manifest_with_the_pinned_images(self):
+        text = (SCRIPTS / "deploy-keda.sh").read_text()
+        self.assertIn('sha256sum -c -', text)
+        self.assertIn("${KEDA_MANIFEST_SHA256}", text)
+        self.assertIn("releases/download/${KEDA_VERSION}/keda-${tag}.yaml", text)
+        for key in ("KEDA_IMAGE", "KEDA_METRICS_APISERVER_IMAGE", "KEDA_ADMISSION_WEBHOOKS_IMAGE"):
+            with self.subTest(image=key):
+                self.assertIn("${%s}" % key, text)
+        self.assertIn("--server-side", text)   # the CRDs are too large for a client-side apply
+
+    def test_the_image_swap_replaces_each_image_exactly_once(self):
+        # The swap refuses a manifest that does not name an image exactly once, so a new KEDA release that renames or
+        # duplicates one fails the install instead of running an unpinned image.
+        text = (SCRIPTS / "deploy-keda.sh").read_text()
+        self.assertIn('grep -c "image: ghcr.io/kedacore/${name}:${tag}$" "$manifest")" = 1', text)
+        names = re.findall(r'"(keda[a-z-]*):\$\{(KEDA_[A-Z_]+)\}"', text)
+        self.assertEqual(sorted(n for n, _ in names), ["keda", "keda-admission-webhooks", "keda-metrics-apiserver"])
+        for name, key in names:
+            self.assertIn(f"/{name}:", versions()[key])
+
+    def test_redeploying_the_servers_removes_either_autoscaler_first(self):
+        text = (SCRIPTS / "deploy-servers.sh").read_text()
+        servers = text.index("delete deployment sim")
+        for autoscaler in ("delete scaledobject sim", "delete hpa sim"):
+            with self.subTest(autoscaler=autoscaler):
+                self.assertLess(text.index(autoscaler), servers)
+
+    def test_a_keda_run_waits_for_the_autoscaler_keda_creates_to_read_the_external_metric(self):
+        run = (SCRIPTS / "run.sh").read_text()
+        self.assertIn('keda-*)', run)
+        self.assertLess(run.index("scripts/deploy-monitoring.sh"), run.index("scripts/deploy-keda.sh"))   # KEDA asks Prometheus
+        self.assertLess(run.index("scripts/deploy-keda.sh"), run.index('scripts/apply-keda.sh "$signal"'))
+        self.assertIn("hpa=keda-hpa-sim value='{.status.currentMetrics[0].external.current.averageValue}'", run)
+        self.assertIn("kubectl -n \"$NS\" get hpa keda-hpa-sim", (SCRIPTS / "apply-keda.sh").read_text())
+
+    def test_the_cluster_workflow_smoke_tests_keda_on_its_own_cluster(self):
+        text = (ROOT / ".github/workflows/cluster.yml").read_text()
+        jobs = re.split(r"^  (?=[a-z-]+:\n)", text.split("\njobs:\n", 1)[1], flags=re.M)
+        keda = next(j for j in jobs if j.startswith("keda-smoke:"))
+        self.assertIn("scripts/smoke-keda.sh", keda)
+        self.assertNotIn("scripts/smoke.sh", keda)   # the HPA's smoke test applies an HPA to the same Deployment
+        self.assertIn("scripts/cluster-up.sh", keda)
+
+    def test_the_run_workflow_offers_every_policy_the_run_script_takes(self):
+        text = (ROOT / ".github/workflows/cluster-run.yml").read_text()
+        for policy in ("static-N", "hpa-SIGNAL", "keda-SIGNAL", "external-SIGNAL"):
+            self.assertIn(policy, text)
+        for signal in ("concurrency", "queue", "utilization"):
+            self.assertTrue((DEPLOY / "hpa" / f"{signal}.yaml").exists() and (DEPLOY / "keda" / f"{signal}.yaml").exists())
+            self.assertIn(signal, text)
+
+    def test_keda_asks_the_same_prometheus(self):
+        for path in (DEPLOY / "keda").glob("*.yaml"):
+            self.assertIn("serverAddress: http://prometheus.monitoring.svc:9090", path.read_text())
+
+
+
+class AdapterExternalTests(unittest.TestCase):
+    """The adapter can serve each signal's sum as an external metric: KEDA's arithmetic on the adapter's path."""
+
+    def test_the_adapter_sums_every_recorded_series_as_an_external_metric(self):
+        monitoring = (DEPLOY / "monitoring.yaml").read_text()
+        rules = monitoring.split("externalRules:", 1)[1].split("---", 1)[0]
+        self.assertIn("'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'", rules)
+        self.assertIn('as: "${1}_sum"', rules)
+        self.assertNotIn("pod: {resource: pod}", rules)   # summed over the namespace's pods, not per pod
+        recorded = set(re.findall(r"record: iab_(\w+)", monitoring))
+        self.assertEqual(set(re.search(r'iab_\(([a-z|]+)\)', rules).group(1).split("|")), recorded)
+
+    def test_the_hpa_may_read_exactly_the_three_sums(self):
+        text = (DEPLOY / "adapter-external.yaml").read_text()
+        self.assertIn("resources: [concurrency_sum, queue_sum, utilization_sum]", text)
+        self.assertIn("verbs: [get, list]", text)
+        self.assertNotRegex(text, r"(verbs|resources|apiGroups):\s*\[?\s*[\"']?\*")
+
+    def test_every_signal_has_an_external_hpa_with_the_hpas_target_bounds_and_window(self):
+        self.assertEqual(sorted(p.name for p in (DEPLOY / "hpa-external").glob("*.yaml")),
+                         sorted(p.name for p in (DEPLOY / "hpa").glob("*.yaml")))
+        for path in (DEPLOY / "hpa-external").glob("*.yaml"):
+            text, hpa = path.read_text(), (DEPLOY / "hpa" / path.name).read_text()
+            with self.subTest(file=path.name):
+                self.assertIn(f"metric: {{name: {path.stem}_sum}}", text)
+                self.assertIn("type: External", text)
+                self.assertEqual(re.search(r"averageValue: (\S+)\}", text).group(1), re.search(r"averageValue: (\S+)\}", hpa).group(1))
+                for line in ("minReplicas: ${MIN_REPLICAS}", "maxReplicas: ${MAX_REPLICAS}",
+                             "scaleDown: {stabilizationWindowSeconds: ${DOWN_WINDOW_S}}"):
+                    self.assertIn(line, text)
+
+    def test_the_external_script_substitutes_what_its_manifests_use_with_the_hpas_defaults(self):
+        script = (SCRIPTS / "apply-external.sh").read_text()
+        used = set()
+        for path in (DEPLOY / "hpa-external").glob("*.yaml"):
+            used |= set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", path.read_text()))
+        self.assertEqual(used, set(re.findall(r"\$\{([A-Z_]+)\}", re.search(r"envsubst '([^']*)'", script).group(1))))
+        self.assertEqual(re.search(r"export (MIN_REPLICAS=.*)", script).group(1),
+                         re.search(r"export (MIN_REPLICAS=.*)", (SCRIPTS / "apply-hpa.sh").read_text()).group(1))
+        self.assertIn("kubectl get namespace keda", script)   # refuses a cluster where KEDA owns the API
+
+    def test_an_external_run_waits_for_the_hpa_to_read_the_sum_from_the_adapter(self):
+        run = (SCRIPTS / "run.sh").read_text()
+        self.assertIn("external-*)", run)
+        branch = run.split('elif [ "$scaler" = external ]; then', 1)[1].split("else", 1)[0]
+        self.assertIn('scripts/apply-external.sh "$signal"', branch)
+        self.assertIn("hpa=sim value='{.status.currentMetrics[0].external.current.averageValue}'", branch)
+        self.assertNotIn("deploy-keda", branch)
+
+    def test_the_smoke_job_checks_the_external_path_after_the_pods_metric_and_never_beside_keda(self):
+        text = (ROOT / ".github/workflows/cluster.yml").read_text()
+        smoke = text.split("\n  smoke:\n", 1)[1].split("\n  keda-smoke:\n", 1)[0]
+        self.assertLess(smoke.index("scripts/smoke.sh"), smoke.index("scripts/smoke-external.sh"))
+        self.assertNotIn("keda", smoke)
+
+    def test_the_external_api_is_registered_apart_from_the_monitoring_every_run_applies(self):
+        self.assertNotIn("external.metrics.k8s.io", (DEPLOY / "monitoring.yaml").read_text().split("externalRules:")[0])
+        self.assertIn("name: v1beta1.external.metrics.k8s.io", (DEPLOY / "adapter-external.yaml").read_text())
 
 
 if __name__ == "__main__":

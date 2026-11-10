@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Added
+- KEDA as the other path to the same signals. `keda-concurrency`, `keda-queue` and `keda-utilization` run KEDA v2.21.0
+  (release manifest by checksum, images by digest) in place of prometheus-adapter: a ScaledObject per signal in
+  `deploy/keda/` sums the series Prometheus records and targets the HPA's value per pod, with the same bounds and
+  scale-down window, which tests hold together. `scripts/deploy-keda.sh`, `scripts/apply-keda.sh`, `scripts/run.sh` and
+  the cluster-run dispatch take them, and a `keda-smoke` job proves the path on a kind cluster.
+- The simulation models the autoscaler KEDA creates: an external metric, the sum over the pods, averaged over every pod
+  the Deployment has, ready or not, then the sum over the target (`Hpa(external=True)`, `keda-SIGNAL` specs).
+- `iab compare` sets KEDA beside the HPA on the cluster, signal by signal and seed by seed, when a comparison holds both.
+- `results/keda/model` (`make results-keda`): the model's prediction, committed before the cluster ran KEDA. The two
+  controllers make the same decisions on concurrency in all eight seeds and differ in one seed on queue and three on
+  utilization.
+- `results/keda/cluster-burst`: the burst under the HPA and under KEDA on each signal on the cluster, three seeds each,
+  in one dispatch. On utilization KEDA served more requests in time on every seed (48.2% against 40.6% at the median,
+  first token 2.7 s against 12.7 s) for 7% more replica-seconds, where the model's arithmetic predicted 1.5 points. On
+  concurrency and queue no difference held. The second dispatch below did not repeat the utilization lead.
+- `results/keda/cluster-ramp-30`: the 30 s ramp under the HPA and under KEDA on concurrency and utilization, three seeds
+  each. The burst's gain on utilization did not repeat: KEDA was worse on every seed, by 0.3, 7.5 and 1.3 points. On
+  concurrency KEDA was better on two seeds and used fewer replica-seconds on all three.
+- `external-concurrency`, `external-queue` and `external-utilization`: the HPA reading the signal's sum over the pods as
+  an external metric from prometheus-adapter (`externalRules`, registered for the external metrics API only on clusters
+  without KEDA): KEDA's arithmetic on the adapter's path. The cluster workflow's smoke job checks the path.
+- `results/keda/cluster-burst-utilization`: the burst on utilization again, same seeds and settings, under the HPA, the
+  external HPA and KEDA. It reversed the first dispatch: KEDA was below the HPA on every seed (41.3% against 43.4%), the
+  external HPA at 44.0%, and KEDA's own runs moved 3.0 to 7.9 points between dispatches. The README withdraws the
+  reading that the path made the difference; over both dispatches no difference between the paths holds.
+
 ## [0.6.0] - 2026-11-08
 
 The metrics pipeline modelled piece by piece, and all four ramps on the cluster. With each pod's sample given its own

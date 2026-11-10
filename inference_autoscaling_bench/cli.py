@@ -27,6 +27,10 @@ def cmd_policies(args) -> int:
     print("static-N                a fixed pool of N pods")
     for name, (_, target) in SIGNALS.items():
         print(f"{'hpa-' + name:<24}the HPA on {name}, default target {target:g} per pod")
+    for name, (_, target) in SIGNALS.items():
+        print(f"{'keda-' + name:<24}KEDA on {name}: the same target, read as an external metric over every pod")
+    for name, (_, target) in SIGNALS.items():
+        print(f"{'external-' + name:<24}the HPA on the sum of {name} from prometheus-adapter: KEDA's arithmetic, the adapter's path")
     print("\nA spec is [label=]policy[:key=value,...]. Keys: target, down, up_window, tolerance, up_pods, up_percent, startup, min, sync, route, lag, scrape.")
     return 0
 

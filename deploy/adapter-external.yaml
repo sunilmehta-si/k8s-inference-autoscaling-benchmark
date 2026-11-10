@@ -1,0 +1,39 @@
+# prometheus-adapter as the external metrics API, for the `external-` policies only: the HPA then reads each signal's
+# sum over the pods as KEDA serves it, but by the adapter's path. KEDA registers the same API, so this is applied only
+# on a cluster that runs an `external-` policy (scripts/apply-external.sh), never beside KEDA.
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.external.metrics.k8s.io
+spec:
+  group: external.metrics.k8s.io
+  version: v1beta1
+  groupPriorityMinimum: 100
+  versionPriority: 100
+  insecureSkipTLSVerify: true
+  service:
+    name: prometheus-adapter
+    namespace: monitoring
+---
+# What the Horizontal Pod Autoscaler may read from the external metrics API: the three sums, read-only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-metrics-server-resources
+rules:
+  - apiGroups: [external.metrics.k8s.io]
+    resources: [concurrency_sum, queue_sum, utilization_sum]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hpa-controller-external-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: external-metrics-server-resources
+subjects:
+  - kind: ServiceAccount
+    name: horizontal-pod-autoscaler
+    namespace: kube-system

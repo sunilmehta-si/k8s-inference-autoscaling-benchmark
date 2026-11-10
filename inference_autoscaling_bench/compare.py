@@ -38,6 +38,84 @@ COMPARED = [
 ]
 
 
+def autoscaled(policy: str) -> bool:
+    """Whether a policy has an autoscaler, and so a scale-down window: the HPA's on a pods or an external metric, or the
+    one KEDA creates."""
+    return policy.startswith(("hpa-", "keda-", "external-"))
+
+
+# Which way is better for the metrics that have one: +1 higher, -1 lower. The others (pods, scaling events) are reported
+# as higher or lower without a verdict.
+BETTER = {"goodput": 1, "ttft_p50_ms": -1, "ttft_p95_ms": -1, "ttft_p99_ms": -1, "unhealthy_s": -1, "replica_seconds": -1}
+
+
+# The ways a signal can reach the autoscaler, as policy prefixes, with the names the report gives them.
+PATHS = {"hpa": "HPA", "keda": "KEDA", "external": "External HPA"}
+# Which paths a report sets against which: KEDA and the external HPA each against the HPA, then KEDA against the
+# external HPA, which share the controller's arithmetic and differ only in who serves the sum.
+MATCHUPS = (("keda", "hpa"), ("external", "hpa"), ("keda", "external"))
+MATCHUP_TITLE = {("keda", "hpa"): "KEDA against the HPA", ("external", "hpa"): "The external HPA against the HPA",
+                 ("keda", "external"): "KEDA against the external HPA"}
+MATCHUP_SETUP = {
+    ("keda", "hpa"): "the HPA reading a pods metric through prometheus-adapter, and the HPA KEDA creates reading the sum "
+                     "over the pods as an external metric",
+    ("external", "hpa"): "the HPA reading a pods metric through prometheus-adapter, and the HPA reading the sum over the "
+                         "pods as an external metric from the same adapter",
+    ("keda", "external"): "the HPA reading the sum over the pods as an external metric from prometheus-adapter, and the "
+                          "HPA KEDA creates reading the same sum from KEDA",
+}
+
+
+def pairs(doc: dict, challenger: str = "keda", baseline: str = "hpa") -> list[tuple[str, list[dict], list[dict]]]:
+    """(signal, baseline rows, challenger rows) for every signal run both ways, on the seeds both ran, in seed order."""
+    out = []
+    for policy in sorted({r["policy"] for r in doc["rows"] if r["policy"].startswith(f"{challenger}-")}):
+        signal = policy[len(challenger) + 1:]
+        theirs = {r["seed"]: r for r in doc["rows"] if r["policy"] == policy}
+        ours = {r["seed"]: r for r in doc["rows"] if r["policy"] == f"{baseline}-{signal}"}
+        seeds = sorted(theirs.keys() & ours.keys())
+        if seeds:
+            out.append((signal, [ours[s] for s in seeds], [theirs[s] for s in seeds]))
+    return out
+
+
+def _seed_by_seed(base: list[float], other: list[float], key: str, name: str = "KEDA") -> str:
+    n = len(base)
+    if key in BETTER:
+        better = sum((k - h) * BETTER[key] > 0 for h, k in zip(base, other))
+        worse = sum((k - h) * BETTER[key] < 0 for h, k in zip(base, other))
+        return f"{name} better in {better}, worse in {worse} of {n}"
+    higher = sum(k > h for h, k in zip(base, other))
+    lower = sum(k < h for h, k in zip(base, other))
+    return f"{name} higher in {higher}, lower in {lower} of {n}"
+
+
+def matchup_section(doc: dict, challenger: str, baseline: str) -> list[str]:
+    """One path against another on the cluster, signal by signal and seed by seed: the same signal, target, bounds and
+    window, so a difference is the path the signal takes. Empty when no signal was run both ways."""
+    found = pairs(doc, challenger, baseline)
+    if not found:
+        return []
+    a, b = PATHS[challenger], PATHS[baseline]
+    lines = [f"### {MATCHUP_TITLE[(challenger, baseline)]}, on the cluster", "",
+             f"Each signal run both ways on the same seeds: {MATCHUP_SETUP[(challenger, baseline)]}. A seed counts as better "
+             "or worse when its two runs differ at all.", ""]
+    for signal, base, other in found:
+        lines += [f"#### {signal}", "", f"Seeds {', '.join(str(r['seed']) for r in base)}.", "",
+                  f"| Metric | {b} | {a} | {a} minus {b} | Seed by seed |", "|---|---|---|---|---|"]
+        for key, name, fmt in COMPARED:
+            h = [r["cluster"][key] for r in base]
+            k = [r["cluster"][key] for r in other]
+            lines.append(f"| {name} | {_cell(h, fmt)} | {_cell(k, fmt)} | {_diff(k, h, key, fmt)} | {_seed_by_seed(h, k, key, a)} |")
+        lines.append("")
+    return lines
+
+
+def keda_section(doc: dict) -> list[str]:
+    """Every matchup the comparison holds, KEDA against the HPA first."""
+    return [line for challenger, baseline in MATCHUPS for line in matchup_section(doc, challenger, baseline)]
+
+
 def load_cluster_runs(directory: str | Path) -> list[dict]:
     runs = [json.loads(p.read_text()) for p in sorted(Path(directory).glob("**/*.json"))]
     runs = [r for r in runs if r.get("summary", {}).get("source") == "cluster"]
@@ -50,7 +128,7 @@ def simulate_like(run: dict, workload: Workload, pod_queues: bool = False, lag_s
     """The simulation's summary for the cluster run's policy, seed and settings."""
     cfg = run["config"]
     policy = run["summary"]["policy"]
-    options = (f"startup={cfg['startup_s']:g}" + (f",down={cfg['down_window_s']:g}" if policy.startswith("hpa-") else "")
+    options = (f"startup={cfg['startup_s']:g}" + (f",down={cfg['down_window_s']:g}" if autoscaled(policy) else "")
                + (",route=pod" if pod_queues else "") + (f",lag={lag_s:g}" if lag_s else "") + (f",scrape={scrape_s:g}" if scrape_s else ""))
     spec = parse(f"{policy}:{options}")
     rows, _ = run_matrix(workload, [spec], [run["summary"]["seed"]], Bounds(cfg["min_replicas"], cfg["max_replicas"]))
@@ -111,13 +189,20 @@ def markdown(doc: dict) -> str:
              f"as it was {METRICS_LAG_S:g} s earlier, as the cluster's Prometheus scrape and rule intervals make it; and one with a "
              f"queue per pod and that pipeline piece by piece: each pod scraped every {SCRAPE_S:g} s at its own offset, a rule "
              f"evaluated every {SCRAPE_S:g} s at its own offset, and the autoscaler reading the latest evaluation. Each cell is the "
-             "median over the seeds, with the lowest and highest in brackets.", ""]
+             "median over the seeds, with the lowest and highest in brackets."
+             + (" A `keda-` run has KEDA in place of prometheus-adapter: KEDA's operator sums the recorded series in "
+                "Prometheus, and the autoscaler it creates reads that sum as an external metric, averaged over every pod "
+                "the Deployment has; its simulation is the same controller reading that metric."
+                if any(r["policy"].startswith("keda-") for r in doc["rows"]) else "")
+             + (" An `external-` run is the HPA reading that same sum from prometheus-adapter as an external metric: "
+                "KEDA's arithmetic on the adapter's path, with the same simulation as a `keda-` run."
+                if any(r["policy"].startswith("external-") for r in doc["rows"]) else ""), ""]
     for policy in policies:
         rows = [r for r in doc["rows"] if r["policy"] == policy]
         cfg = rows[0]["config"]
         lines += [f"### `{policy}`", "",
                   f"{len(rows)} {'seed' if len(rows) == 1 else 'seeds'} ({', '.join(str(r['seed']) for r in rows)}). Pods start in {cfg['startup_s']:g} s"
-                  + (f", scale-down window {cfg['down_window_s']:g} s" if policy.startswith("hpa-") else "") + ".", "",
+                  + (f", scale-down window {cfg['down_window_s']:g} s" if autoscaled(policy) else "") + ".", "",
                   "| Metric | Cluster | One shared queue | Queue per pod | Queue per pod, lag | Queue per pod, scraped "
                   "| Cluster minus one queue | Cluster minus queue per pod | Cluster minus queue per pod, lag "
                   "| Cluster minus queue per pod, scraped |",
@@ -129,6 +214,7 @@ def markdown(doc: dict) -> str:
                          + " | ".join(_diff(c, v, key, fmt) for v in sides) + " |")
         failed = sum(r["client"]["failed"] for r in rows)
         lines += ["", f"Requests the cluster did not answer: {failed:,} of {sum(r['client']['requests'] for r in rows):,}.", ""]
+    lines += keda_section(doc)
     lines += ["### Run by run", "", "| Policy | Seed | Goodput, cluster | Goodput, one queue | Goodput, queue per pod | Goodput, queue per pod, lag "
               "| Goodput, queue per pod, scraped | TTFT p95 (ms), cluster | TTFT p95 (ms), one queue | TTFT p95 (ms), queue per pod "
               "| TTFT p95 (ms), queue per pod, lag | TTFT p95 (ms), queue per pod, scraped | Pods at peak, cluster | Pods at peak, simulation |",

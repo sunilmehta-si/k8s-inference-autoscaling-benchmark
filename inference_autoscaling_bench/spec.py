@@ -3,9 +3,11 @@
     static-24                          a fixed pool of 24 pods
     hpa-concurrency                    the HPA on requests in the system per pod, every default
     hpa-queue:target=2,down=60         the HPA on waiting requests per pod, target 2, a 60 s scale-down window
+    keda-concurrency                   the HPA KEDA creates, reading the same signal as an external metric
+    external-concurrency               the HPA reading the same sum from prometheus-adapter (KEDA's arithmetic)
     slow=hpa-rps:startup=120           a label, and pods that take 120 s to start
 
-Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA; startup
+Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA or KEDA; startup
 (seconds before a new pod is ready), min (the fewest pods, the standing headroom) and sync (seconds between the
 autoscaler's decisions) for any policy, route (`central`, the default: one shared queue; `pod`: each request is
 sent to a random ready pod when it arrives and waits in that pod's own queue, as behind a Kubernetes Service), lag
@@ -86,15 +88,18 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
         if size < 1:
             raise ValueError("a static pool needs at least one pod")
         return Spec(label, text, lambda: Static(size), replica, minimum, sync, pod_queues, lag, scrape)
-    signal = kind[len("hpa-"):] if kind.startswith("hpa-") else ""
+    external = kind.startswith(("keda-", "external-"))
+    signal = kind.partition("-")[2] if kind.startswith(("hpa-", "keda-", "external-")) else ""
     if signal not in SIGNALS:
-        raise ValueError(f"unknown policy {kind!r}: use static-N or hpa-<{'|'.join(SIGNALS)}>")
+        signals = "|".join(SIGNALS)
+        raise ValueError(f"unknown policy {kind!r}: use static-N, hpa-<{signals}>, keda-<{signals}> or external-<{signals}>")
     arguments = {}
     for key, value in params.items():
         if key not in HPA_KEYS:
             raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min, sync, route, lag, scrape")
         arguments[HPA_ARGUMENT.get(key, key)] = _number(HPA_KEYS[key], key, value)
-    return Spec(label, text, lambda: Hpa(signal, name=label, **arguments), replica, minimum, sync, pod_queues, lag, scrape)
+    return Spec(label, text, lambda: Hpa(signal, name=label, external=external, **arguments), replica, minimum, sync,
+                pod_queues, lag, scrape)
 
 
 def with_route(text: str, route: str) -> str:

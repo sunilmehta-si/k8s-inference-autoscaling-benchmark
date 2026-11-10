@@ -24,6 +24,51 @@ for scheduling, pulling an image and loading a model.
 
 Everything is pinned in [`deploy/versions.env`](../deploy/versions.env): images by digest, kind by checksum.
 
+## KEDA, the other path
+
+[KEDA](https://keda.sh) is the other common way to scale on these signals, and a `keda-` policy runs it in the adapter's
+place:
+
+```
+Prometheus (recording rules) <── KEDA operator: sum(iab_SIGNAL{namespace="iab"})
+                                       │ external metrics API
+                Horizontal Pod Autoscaler keda-hpa-sim ──> Deployment `sim`
+```
+
+Each signal has a ScaledObject in [`deploy/keda/`](../deploy/keda) beside its HPA in [`deploy/hpa/`](../deploy/hpa): the
+same recorded series, target, bounds and scale-down window, which a test holds together. KEDA is installed from its
+release manifest, checked by checksum, with its images swapped for pinned digests
+([`scripts/deploy-keda.sh`](../scripts/deploy-keda.sh)). KEDA 2.21 is tested upstream on Kubernetes 1.34 to 1.36; the node
+image is 1.37, and the cluster workflow's `keda-smoke` job is the check that it works there.
+
+Two things differ, and only two:
+
+- **The path.** No adapter: KEDA's metrics server asks KEDA's operator, which queries Prometheus when the autoscaler asks.
+- **The controller's arithmetic.** The HPA reads a pods metric, one value per pod, and averages it over the pods that
+  report; when pods are still starting it counts them as using nothing and holds if that brings the ratio under 1.
+  KEDA's autoscaler reads one external value, the sum, averages it over every pod the Deployment has, ready or not, and
+  otherwise asks for the sum over the target. The simulation models both: `keda-SIGNAL` is `hpa-SIGNAL` with that
+  arithmetic.
+
+Before the cluster ran KEDA, [`results/keda/model`](../results/keda/model/README.md) put the prediction on record: with a
+queue per pod and the scraped pipeline, the two controllers make the same decisions on concurrency in all eight seeds,
+and differ in one seed on queue and three on utilization, by little. A difference on the cluster beyond that is the path.
+
+[`results/keda/cluster-burst`](../results/keda/cluster-burst/README.md) is what the cluster said first. On concurrency and
+queue no difference held. On utilization KEDA served more in time on every seed, by 7.5 points of goodput at the median,
+five times the model's prediction.
+
+It did not hold. An `external-` policy is the HPA reading the signal's sum from prometheus-adapter as an external metric
+(`deploy/hpa-external/`, with the adapter's `externalRules` and [`deploy/adapter-external.yaml`](../deploy/adapter-external.yaml)
+registering it for the external metrics API): KEDA's arithmetic on the adapter's path, meant to tell the path from the
+arithmetic. Its model is the same controller as `keda-`, so only the cluster can tell them apart. KEDA registers the same
+API, so `scripts/apply-external.sh` refuses a cluster with KEDA on it. A second dispatch of the same seeds with all three
+([`results/keda/cluster-burst-utilization`](../results/keda/cluster-burst-utilization/README.md)) put KEDA below the HPA
+on every seed and the external HPA between them, and moved KEDA's own runs by 3.0 to 7.9 points; the 30 s ramp
+([`results/keda/cluster-ramp-30`](../results/keda/cluster-ramp-30/README.md)) put KEDA behind as well. Utilization's
+goodput moves this much from one dispatch to the next, so a difference between paths needs more seeds and more than one
+dispatch before it is claimed.
+
 ## What differs from the simulation
 
 These are the differences a cluster run can show, and why a comparison is worth making:
@@ -56,6 +101,9 @@ Each policy and seed gets its own cluster, so none inherits another's state, and
 `scripts/run.sh POLICY SEED WORKLOAD OUT` is the whole run: servers, monitoring, the autoscaler, then the load client. For
 an autoscaler it waits until the autoscaler can read the signal before the first request, so a run measures the
 autoscaler and not how long the metrics path took to warm up.
+
+The same command runs KEDA with `-f 'policies=["hpa-queue","keda-queue"]'`: each `keda-` run installs KEDA on its own
+cluster first.
 
 A pull request that touches the runner replays the one-minute `smoke` workload through one policy, so the runner is
 proven by the change that could break it.

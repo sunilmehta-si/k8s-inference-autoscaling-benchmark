@@ -12,6 +12,12 @@ differences between signals are only meaningful if the controller around them is
      scaling down follows the highest recommendation in the down window (300 s by default).
   5. Scale-up rate limit: at most the larger of +4 pods and doubling per sync period (the default policies).
 
+With `external=True` it follows the same controller reading the signal as KEDA serves it: an external metric, the sum
+over the pods, with a target per pod. The controller averages that over every pod the Deployment has, ready or still
+starting, and within the tolerance changes nothing; otherwise it asks for ceil(sum / target). Step 2 does not apply, so
+pods still starting count in the average whatever the direction, and no ready pod is needed for a decision. Steps 4 and
+5 are the same.
+
 Request concurrency, queue depth, slot utilization and request rate are the four signals compared. They are
 inputs to the same controller, so a difference between them is a difference in the signal.
 """
@@ -70,7 +76,8 @@ SIGNALS = {
 
 class Hpa(Policy):
     def __init__(self, signal: str, target: float | None = None, down_window_s: float = 300.0, up_window_s: float = 0.0,
-                 tolerance: float = 0.1, up_pods: int = 4, up_percent: float = 100.0, name: str | None = None):
+                 tolerance: float = 0.1, up_pods: int = 4, up_percent: float = 100.0, name: str | None = None,
+                 external: bool = False):
         if signal not in SIGNALS:
             raise ValueError(f"unknown signal {signal!r}; choose from {', '.join(SIGNALS)}")
         self.signal = signal
@@ -80,11 +87,19 @@ class Hpa(Policy):
             raise ValueError("the target must be positive")
         self.down_window_s, self.up_window_s = down_window_s, up_window_s
         self.tolerance, self.up_pods, self.up_percent = tolerance, up_pods, up_percent
-        self.name = name or f"hpa-{signal}"
+        self.external = external
+        self.name = name or f"{'keda' if external else 'hpa'}-{signal}"
         self.history: deque[tuple[float, int]] = deque()
 
     def decide(self, obs: Observation, bounds: Bounds) -> int | None:
         current = obs.ready + obs.pending
+        if self.external:
+            if current == 0:
+                return None
+            total = self.metric(obs)
+            ratio = total / current / self.target
+            desired = current if abs(ratio - 1) <= self.tolerance else math.ceil(total / self.target)
+            return self._remember(obs.now, desired, current, bounds)
         if obs.ready == 0:
             return None  # no metric from any pod: the controller leaves the count alone
         total = self.metric(obs)
