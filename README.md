@@ -212,11 +212,16 @@ would change: on concurrency nothing, in all eight seeds; on utilization 1.5 poi
 - **On utilization KEDA served more requests in time on every seed, for more pods.** Goodput 48.2% against 40.6% (49.2%,
   47.1% and 48.2% against 40.6%, 39.2% and 43.9%), the median first token 2.7 s against 12.7 s, 860 unhealthy seconds
   against 1,040, at 7% more replica-seconds (23,975 against 22,500), more in every seed.
-- **Most of that is the path, not the arithmetic.** The HPA through the adapter is below the sampled-pipeline model on
-  every seed, by 2.3 to 5.7 points; KEDA is above it or within 0.4 points on every seed. Some of the delay the cluster
-  added on utilization was prometheus-adapter's. These runs do not say which part of the adapter's path it is.
+- **On the burst most of that is the path, not the arithmetic.** The HPA through the adapter is below the
+  sampled-pipeline model on every seed, by 2.3 to 5.7 points; KEDA is above it or within 0.4 points on every seed.
+  These runs do not say which part of the adapter's path it would be.
 - **On concurrency and queue no difference held.** KEDA's goodput was worse in two seeds of three on both (concurrency
   77.3% against 76.3% at the median, queue 79.7% against 77.9%), as the model said for concurrency.
+- **On the 30 s ramp the gain did not repeat.** In [results/keda/cluster-ramp-30](results/keda/cluster-ramp-30/README.md)
+  KEDA on utilization was worse on every seed (41.0% against 46.4% at the median), by 0.3, 7.5 and 1.3 points. On
+  concurrency it was better on two seeds of three (75.8% against 73.8%) and used fewer replica-seconds on all three. The
+  HPA's own utilization runs there were 2.1 to 5.0 points above the committed ramp's on each seed, so three seeds of a
+  signal this noisy do not settle it either way.
 - **The HPA's side repeats the first cluster dataset.** `hpa-utilization` served 40.6%, 39.2% and 43.9% against 40.9%,
   38.4% and 43.3% in [results/cluster](results/cluster/README.md), within a point on every seed, so the gap is not a
   different day on the runners.

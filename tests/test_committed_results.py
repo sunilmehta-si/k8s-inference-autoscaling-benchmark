@@ -796,3 +796,33 @@ class KedaClusterRampTests(unittest.TestCase):
 
     def test_the_readme_regenerates_from_the_runs(self):
         self.assertEqual((self.DIR / "README.md").read_text(), compare.markdown(compare.read(self.DIR)))
+
+
+class KedaRampClaimTests(unittest.TestCase):
+    """The README's 30 s ramp bullet in the KEDA section, number by number."""
+    DOC = compare.read(ROOT / "results" / "keda" / "cluster-ramp-30")
+    FIRST = compare.read(ROOT / "results" / "cluster-ramps" / "ramp-30")
+
+    @staticmethod
+    def values(doc, policy, key="goodput"):
+        return [r["cluster"][key] for r in sorted(doc["rows"], key=lambda r: r["seed"]) if r["policy"] == policy]
+
+    def test_keda_on_utilization_was_worse_on_every_seed_by_the_quoted_points(self):
+        hpa, keda = self.values(self.DOC, "hpa-utilization"), self.values(self.DOC, "keda-utilization")
+        gaps = [h - k for h, k in zip(hpa, keda)]
+        self.assertTrue(all(g > 0 for g in gaps))
+        self.assertIn(f"({statistics.median(keda) * 100:.1f}% against {statistics.median(hpa) * 100:.1f}% at the median), by "
+                      f"{gaps[0] * 100:.1f}, {gaps[1] * 100:.1f} and {gaps[2] * 100:.1f} points", FLAT)
+
+    def test_on_concurrency_keda_was_better_on_two_seeds_and_cheaper_on_all(self):
+        hpa, keda = self.values(self.DOC, "hpa-concurrency"), self.values(self.DOC, "keda-concurrency")
+        self.assertEqual(sum(k > h for h, k in zip(hpa, keda)), 2)
+        self.assertIn(f"better on two seeds of three ({statistics.median(keda) * 100:.1f}% against "
+                      f"{statistics.median(hpa) * 100:.1f}%)", FLAT)
+        cost_h, cost_k = self.values(self.DOC, "hpa-concurrency", "replica_seconds"), self.values(self.DOC, "keda-concurrency", "replica_seconds")
+        self.assertTrue(all(k < h for h, k in zip(cost_h, cost_k)))
+
+    def test_the_hpas_utilization_runs_were_above_the_committed_ramps_on_every_seed(self):
+        above = [a - b for a, b in zip(self.values(self.DOC, "hpa-utilization"), self.values(self.FIRST, "hpa-utilization"))]
+        self.assertTrue(all(a > 0 for a in above))
+        self.assertIn(f"{min(above) * 100:.1f} to {max(above) * 100:.1f} points above the committed ramp's on each seed", FLAT)
