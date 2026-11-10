@@ -189,3 +189,38 @@ class RebuildTests(unittest.TestCase):
             self.assertEqual(cli.main(["recompare", str(out), "--workload", str(ROOT / "workloads/smoke.json")]), 0)
             self.assertNotIn("-100.0%", (out / "README.md").read_text())
             self.assertIn("goodput", compare.read(out)["rows"][0]["simulation_scrape"])
+
+
+def keda_row(policy, seed, **cluster):
+    base = {key: 1.0 for key, _, _ in compare.COMPARED}
+    base.update(cluster)
+    return {"policy": policy, "seed": seed, "cluster": base}
+
+
+class KedaSectionTests(unittest.TestCase):
+    def test_signals_are_paired_on_the_seeds_both_ran(self):
+        doc = {"rows": [keda_row("hpa-queue", 1), keda_row("hpa-queue", 2), keda_row("keda-queue", 2), keda_row("keda-queue", 3),
+                        keda_row("keda-utilization", 1), keda_row("static-24", 1)]}
+        found = compare.pairs(doc)
+        self.assertEqual([(s, [r["seed"] for r in h], [r["seed"] for r in k]) for s, h, k in found], [("queue", [2], [2])])
+
+    def test_better_and_worse_follow_each_metrics_direction(self):
+        doc = {"rows": [keda_row("hpa-concurrency", 1, goodput=0.80, ttft_p95_ms=900.0, flaps=1.0),
+                        keda_row("keda-concurrency", 1, goodput=0.85, ttft_p95_ms=1000.0, flaps=2.0),
+                        keda_row("hpa-concurrency", 2, goodput=0.80, ttft_p95_ms=900.0, flaps=1.0),
+                        keda_row("keda-concurrency", 2, goodput=0.80, ttft_p95_ms=800.0, flaps=0.0)]}
+        text = "\n".join(compare.keda_section(doc))
+        self.assertIn("#### concurrency", text)
+        self.assertRegex(text, r"\| Goodput \(TTFT within the objective\) \| 80\.0% \| 82\.5% <sub>.*</sub> \| \+2\.5 points \| KEDA better in 1, worse in 0 of 2 \|")
+        self.assertRegex(text, r"\| TTFT p95 \(ms\) \| 900 \| .* \| KEDA better in 1, worse in 1 of 2 \|")
+        self.assertRegex(text, r"\| Flaps \| 1 \| .* \| KEDA higher in 1, lower in 1 of 2 \|")
+
+    def test_no_section_without_a_signal_run_both_ways(self):
+        self.assertEqual(compare.keda_section({"rows": [keda_row("hpa-queue", 1), keda_row("static-24", 1)]}), [])
+
+    def test_the_committed_comparisons_have_no_section_and_are_unchanged(self):
+        for path in [ROOT / "results/cluster", *sorted((ROOT / "results/cluster-ramps").iterdir())]:
+            with self.subTest(dataset=path.name):
+                doc = compare.read(path)
+                self.assertNotIn("KEDA", compare.markdown(doc))
+                self.assertEqual(compare.markdown(doc), (path / "README.md").read_text())

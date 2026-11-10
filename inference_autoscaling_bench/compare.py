@@ -43,6 +43,56 @@ def autoscaled(policy: str) -> bool:
     return policy.startswith(("hpa-", "keda-"))
 
 
+# Which way is better for the metrics that have one: +1 higher, -1 lower. The others (pods, scaling events) are reported
+# as higher or lower without a verdict.
+BETTER = {"goodput": 1, "ttft_p50_ms": -1, "ttft_p95_ms": -1, "ttft_p99_ms": -1, "unhealthy_s": -1, "replica_seconds": -1}
+
+
+def pairs(doc: dict) -> list[tuple[str, list[dict], list[dict]]]:
+    """(signal, HPA rows, KEDA rows) for every signal run both ways, on the seeds both ran, in seed order."""
+    out = []
+    for policy in sorted({r["policy"] for r in doc["rows"] if r["policy"].startswith("keda-")}):
+        signal = policy[len("keda-"):]
+        keda = {r["seed"]: r for r in doc["rows"] if r["policy"] == policy}
+        hpa = {r["seed"]: r for r in doc["rows"] if r["policy"] == f"hpa-{signal}"}
+        seeds = sorted(keda.keys() & hpa.keys())
+        if seeds:
+            out.append((signal, [hpa[s] for s in seeds], [keda[s] for s in seeds]))
+    return out
+
+
+def _seed_by_seed(hpa: list[float], keda: list[float], key: str) -> str:
+    n = len(hpa)
+    if key in BETTER:
+        better = sum((k - h) * BETTER[key] > 0 for h, k in zip(hpa, keda))
+        worse = sum((k - h) * BETTER[key] < 0 for h, k in zip(hpa, keda))
+        return f"KEDA better in {better}, worse in {worse} of {n}"
+    higher = sum(k > h for h, k in zip(hpa, keda))
+    lower = sum(k < h for h, k in zip(hpa, keda))
+    return f"KEDA higher in {higher}, lower in {lower} of {n}"
+
+
+def keda_section(doc: dict) -> list[str]:
+    """KEDA against the HPA on the cluster, signal by signal and seed by seed: the same signal, target, bounds and
+    window, so a difference is the path the signal takes. Empty when no signal was run both ways."""
+    found = pairs(doc)
+    if not found:
+        return []
+    lines = ["### KEDA against the HPA, on the cluster", "",
+             "Each signal run both ways on the same seeds: the HPA reading a pods metric through prometheus-adapter, and "
+             "the HPA KEDA creates reading the sum over the pods as an external metric. A seed counts as better or worse "
+             "when its two runs differ at all.", ""]
+    for signal, hpa, keda in found:
+        lines += [f"#### {signal}", "", f"Seeds {', '.join(str(r['seed']) for r in hpa)}.", "",
+                  "| Metric | HPA | KEDA | KEDA minus HPA | Seed by seed |", "|---|---|---|---|---|"]
+        for key, name, fmt in COMPARED:
+            h = [r["cluster"][key] for r in hpa]
+            k = [r["cluster"][key] for r in keda]
+            lines.append(f"| {name} | {_cell(h, fmt)} | {_cell(k, fmt)} | {_diff(k, h, key, fmt)} | {_seed_by_seed(h, k, key)} |")
+        lines.append("")
+    return lines
+
+
 def load_cluster_runs(directory: str | Path) -> list[dict]:
     runs = [json.loads(p.read_text()) for p in sorted(Path(directory).glob("**/*.json"))]
     runs = [r for r in runs if r.get("summary", {}).get("source") == "cluster"]
@@ -134,6 +184,7 @@ def markdown(doc: dict) -> str:
                          + " | ".join(_diff(c, v, key, fmt) for v in sides) + " |")
         failed = sum(r["client"]["failed"] for r in rows)
         lines += ["", f"Requests the cluster did not answer: {failed:,} of {sum(r['client']['requests'] for r in rows):,}.", ""]
+    lines += keda_section(doc)
     lines += ["### Run by run", "", "| Policy | Seed | Goodput, cluster | Goodput, one queue | Goodput, queue per pod | Goodput, queue per pod, lag "
               "| Goodput, queue per pod, scraped | TTFT p95 (ms), cluster | TTFT p95 (ms), one queue | TTFT p95 (ms), queue per pod "
               "| TTFT p95 (ms), queue per pod, lag | TTFT p95 (ms), queue per pod, scraped | Pods at peak, cluster | Pods at peak, simulation |",
