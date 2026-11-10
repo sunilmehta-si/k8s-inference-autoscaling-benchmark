@@ -9,6 +9,9 @@ cd "$ROOT"
 
 export REPLICAS="${1:-2}"
 export STARTUP_S="${STARTUP_S:-45}"
+# Neither autoscaler may outlive the servers it scaled: KEDA's ScaledObject deletes the autoscaler it created with it, and
+# fails quietly where KEDA is not installed.
+kubectl -n "$NS" delete scaledobject sim --ignore-not-found --wait=true >/dev/null 2>&1 || true
 kubectl -n "$NS" delete hpa sim --ignore-not-found >/dev/null 2>&1 || true
 kubectl -n "$NS" delete deployment sim --ignore-not-found --wait=true >/dev/null 2>&1 || true
 envsubst '${SIM_IMAGE} ${REPLICAS} ${STARTUP_S}' < deploy/servers.yaml | kubectl apply -f - >/dev/null

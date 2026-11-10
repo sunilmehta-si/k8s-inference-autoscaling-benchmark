@@ -241,6 +241,13 @@ class KedaTests(unittest.TestCase):
         for name, key in names:
             self.assertIn(f"/{name}:", versions()[key])
 
+    def test_redeploying_the_servers_removes_either_autoscaler_first(self):
+        text = (SCRIPTS / "deploy-servers.sh").read_text()
+        servers = text.index("delete deployment sim")
+        for autoscaler in ("delete scaledobject sim", "delete hpa sim"):
+            with self.subTest(autoscaler=autoscaler):
+                self.assertLess(text.index(autoscaler), servers)
+
     def test_keda_asks_the_same_prometheus(self):
         for path in (DEPLOY / "keda").glob("*.yaml"):
             self.assertIn("serverAddress: http://prometheus.monitoring.svc:9090", path.read_text())
