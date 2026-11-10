@@ -264,6 +264,14 @@ class KedaTests(unittest.TestCase):
         self.assertNotIn("scripts/smoke.sh", keda)   # the HPA's smoke test applies an HPA to the same Deployment
         self.assertIn("scripts/cluster-up.sh", keda)
 
+    def test_the_run_workflow_offers_every_policy_the_run_script_takes(self):
+        text = (ROOT / ".github/workflows/cluster-run.yml").read_text()
+        for policy in ("static-N", "hpa-SIGNAL", "keda-SIGNAL"):
+            self.assertIn(policy, text)
+        for signal in ("concurrency", "queue", "utilization"):
+            self.assertTrue((DEPLOY / "hpa" / f"{signal}.yaml").exists() and (DEPLOY / "keda" / f"{signal}.yaml").exists())
+            self.assertIn(signal, text)
+
     def test_keda_asks_the_same_prometheus(self):
         for path in (DEPLOY / "keda").glob("*.yaml"):
             self.assertIn("serverAddress: http://prometheus.monitoring.svc:9090", path.read_text())
