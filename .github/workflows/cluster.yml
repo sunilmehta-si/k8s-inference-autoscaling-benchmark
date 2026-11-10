@@ -1,7 +1,8 @@
 name: cluster
 
 # Brings up a kind cluster with the model servers, Prometheus and prometheus-adapter, and checks that a real Horizontal
-# Pod Autoscaler can read the signal end to end. Only the deploy files and scripts can break it, so only they trigger it.
+# Pod Autoscaler can read the signal end to end, through the adapter and, on a second cluster, through KEDA. Only the
+# deploy files and scripts can break it, so only they trigger it.
 on:
   pull_request:
     paths: ["deploy/**", "scripts/**", ".github/workflows/cluster.yml"]
@@ -48,6 +49,37 @@ jobs:
         run: scripts/deploy-monitoring.sh
       - name: The metrics path, end to end
         run: scripts/smoke.sh
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40 || true
+
+  keda-smoke:
+    # KEDA's path on its own cluster: one autoscaler per Deployment, so it never meets the HPA the smoke job applies.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install kind
+        run: |
+          . deploy/versions.env
+          curl -sSfL -o "$RUNNER_TEMP/kind" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256_LINUX_AMD64}  $RUNNER_TEMP/kind" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/kind"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Cluster
+        run: scripts/cluster-up.sh
+      - name: Model servers
+        env:
+          STARTUP_S: "20"
+        run: scripts/deploy-servers.sh 2
+      - name: Monitoring
+        run: scripts/deploy-monitoring.sh
+      - name: KEDA's path, end to end
+        run: scripts/smoke-keda.sh
       - name: Cluster state on failure
         if: failure()
         run: |

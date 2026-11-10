@@ -256,6 +256,14 @@ class KedaTests(unittest.TestCase):
         self.assertIn("hpa=keda-hpa-sim value='{.status.currentMetrics[0].external.current.averageValue}'", run)
         self.assertIn("kubectl -n \"$NS\" get hpa keda-hpa-sim", (SCRIPTS / "apply-keda.sh").read_text())
 
+    def test_the_cluster_workflow_smoke_tests_keda_on_its_own_cluster(self):
+        text = (ROOT / ".github/workflows/cluster.yml").read_text()
+        jobs = re.split(r"^  (?=[a-z-]+:\n)", text.split("\njobs:\n", 1)[1], flags=re.M)
+        keda = next(j for j in jobs if j.startswith("keda-smoke:"))
+        self.assertIn("scripts/smoke-keda.sh", keda)
+        self.assertNotIn("scripts/smoke.sh", keda)   # the HPA's smoke test applies an HPA to the same Deployment
+        self.assertIn("scripts/cluster-up.sh", keda)
+
     def test_keda_asks_the_same_prometheus(self):
         for path in (DEPLOY / "keda").glob("*.yaml"):
             self.assertIn("serverAddress: http://prometheus.monitoring.svc:9090", path.read_text())
