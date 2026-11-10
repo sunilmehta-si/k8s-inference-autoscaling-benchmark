@@ -266,7 +266,7 @@ class KedaTests(unittest.TestCase):
 
     def test_the_run_workflow_offers_every_policy_the_run_script_takes(self):
         text = (ROOT / ".github/workflows/cluster-run.yml").read_text()
-        for policy in ("static-N", "hpa-SIGNAL", "keda-SIGNAL"):
+        for policy in ("static-N", "hpa-SIGNAL", "keda-SIGNAL", "external-SIGNAL"):
             self.assertIn(policy, text)
         for signal in ("concurrency", "queue", "utilization"):
             self.assertTrue((DEPLOY / "hpa" / f"{signal}.yaml").exists() and (DEPLOY / "keda" / f"{signal}.yaml").exists())
@@ -318,6 +318,14 @@ class AdapterExternalTests(unittest.TestCase):
         self.assertEqual(re.search(r"export (MIN_REPLICAS=.*)", script).group(1),
                          re.search(r"export (MIN_REPLICAS=.*)", (SCRIPTS / "apply-hpa.sh").read_text()).group(1))
         self.assertIn("kubectl get namespace keda", script)   # refuses a cluster where KEDA owns the API
+
+    def test_an_external_run_waits_for_the_hpa_to_read_the_sum_from_the_adapter(self):
+        run = (SCRIPTS / "run.sh").read_text()
+        self.assertIn("external-*)", run)
+        branch = run.split('elif [ "$scaler" = external ]; then', 1)[1].split("else", 1)[0]
+        self.assertIn('scripts/apply-external.sh "$signal"', branch)
+        self.assertIn("hpa=sim value='{.status.currentMetrics[0].external.current.averageValue}'", branch)
+        self.assertNotIn("deploy-keda", branch)
 
     def test_the_external_api_is_registered_apart_from_the_monitoring_every_run_applies(self):
         self.assertNotIn("external.metrics.k8s.io", (DEPLOY / "monitoring.yaml").read_text().split("externalRules:")[0])

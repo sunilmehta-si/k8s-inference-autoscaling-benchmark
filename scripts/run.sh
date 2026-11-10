@@ -2,7 +2,7 @@
 # One policy and seed, start to finish, on the cluster scripts/cluster-up.sh made: servers, monitoring, the autoscaler,
 # then the load client, with the cluster sampled throughout.
 # Usage: scripts/run.sh POLICY SEED WORKLOAD_JSON OUT_JSON
-#   POLICY is static-N, hpa-SIGNAL or keda-SIGNAL (concurrency, queue, utilization).
+#   POLICY is static-N, hpa-SIGNAL, keda-SIGNAL or external-SIGNAL (concurrency, queue, utilization).
 #   Environment: STARTUP_S (45), MIN_REPLICAS (2), MAX_REPLICAS (32), DOWN_WINDOW_S (300).
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -14,19 +14,24 @@ case "$policy" in
   static-[0-9]*) replicas="${policy#static-}"; signal="" ;;
   hpa-*)         replicas="${MIN_REPLICAS:-2}"; signal="${policy#hpa-}"; scaler=hpa ;;
   keda-*)        replicas="${MIN_REPLICAS:-2}"; signal="${policy#keda-}"; scaler=keda ;;
-  *) echo "unknown policy '$policy': use static-N, hpa-SIGNAL or keda-SIGNAL" >&2; exit 1 ;;
+  external-*)    replicas="${MIN_REPLICAS:-2}"; signal="${policy#external-}"; scaler=external ;;
+  *) echo "unknown policy '$policy': use static-N, hpa-SIGNAL, keda-SIGNAL or external-SIGNAL" >&2; exit 1 ;;
 esac
 export STARTUP_S="${STARTUP_S:-45}"
 
 scripts/deploy-servers.sh "$replicas"
 scripts/deploy-monitoring.sh
 if [ -n "$signal" ]; then
-  # Both autoscalers are a Horizontal Pod Autoscaler: the HPA reads a pods metric named for the signal from the
-  # adapter, the one KEDA creates reads an external metric from KEDA.
+  # Every autoscaler is a Horizontal Pod Autoscaler: the HPA reads a pods metric named for the signal from the
+  # adapter, the one KEDA creates reads an external metric from KEDA, and an external- HPA reads the same sum from the
+  # adapter.
   if [ "$scaler" = keda ]; then
     scripts/deploy-keda.sh
     scripts/apply-keda.sh "$signal"
     hpa=keda-hpa-sim value='{.status.currentMetrics[0].external.current.averageValue}'
+  elif [ "$scaler" = external ]; then
+    scripts/apply-external.sh "$signal"
+    hpa=sim value='{.status.currentMetrics[0].external.current.averageValue}'
   else
     scripts/apply-hpa.sh "$signal"
     hpa=sim value='{.status.currentMetrics[0].pods.current.averageValue}'
