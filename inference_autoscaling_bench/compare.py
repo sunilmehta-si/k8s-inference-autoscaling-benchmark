@@ -193,7 +193,10 @@ def markdown(doc: dict) -> str:
              + (" A `keda-` run has KEDA in place of prometheus-adapter: KEDA's operator sums the recorded series in "
                 "Prometheus, and the autoscaler it creates reads that sum as an external metric, averaged over every pod "
                 "the Deployment has; its simulation is the same controller reading that metric."
-                if any(r["policy"].startswith("keda-") for r in doc["rows"]) else ""), ""]
+                if any(r["policy"].startswith("keda-") for r in doc["rows"]) else "")
+             + (" An `external-` run is the HPA reading that same sum from prometheus-adapter as an external metric: "
+                "KEDA's arithmetic on the adapter's path, with the same simulation as a `keda-` run."
+                if any(r["policy"].startswith("external-") for r in doc["rows"]) else ""), ""]
     for policy in policies:
         rows = [r for r in doc["rows"] if r["policy"] == policy]
         cfg = rows[0]["config"]

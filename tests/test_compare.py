@@ -257,3 +257,12 @@ class MatchupTests(unittest.TestCase):
         rows = [r for r in self.ROWS if not r["policy"].startswith("external-")]
         self.assertEqual(re.findall(r"^### (.+)$", "\n".join(compare.keda_section({"rows": rows})), re.M),
                          ["KEDA against the HPA, on the cluster"])
+
+
+class ExternalSetupTests(unittest.TestCase):
+    def test_the_setup_says_what_an_external_run_is_only_when_there_is_one(self):
+        doc = compare.read(ROOT / "results/cluster")
+        self.assertNotIn("An `external-` run", compare.markdown(doc))
+        row = dict(doc["rows"][0], policy="external-concurrency")
+        self.assertIn("An `external-` run is the HPA reading that same sum from prometheus-adapter",
+                      compare.markdown({**doc, "rows": doc["rows"] + [row]}))
