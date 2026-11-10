@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+- KEDA as the other path to the same signals. `keda-concurrency`, `keda-queue` and `keda-utilization` run KEDA v2.21.0
+  (release manifest by checksum, images by digest) in place of prometheus-adapter: a ScaledObject per signal in
+  `deploy/keda/` sums the series Prometheus records and targets the HPA's value per pod, with the same bounds and
+  scale-down window, which tests hold together. `scripts/deploy-keda.sh`, `scripts/apply-keda.sh`, `scripts/run.sh` and
+  the cluster-run dispatch take them, and a `keda-smoke` job proves the path on a kind cluster.
+- The simulation models the autoscaler KEDA creates: an external metric, the sum over the pods, averaged over every pod
+  the Deployment has, ready or not, then the sum over the target (`Hpa(external=True)`, `keda-SIGNAL` specs).
+- `iab compare` sets KEDA beside the HPA on the cluster, signal by signal and seed by seed, when a comparison holds both.
+- `results/keda/model` (`make results-keda`): the model's prediction, committed before the cluster ran KEDA. The two
+  controllers make the same decisions on concurrency in all eight seeds and differ in one seed on queue and three on
+  utilization.
+
 ## [0.6.0] - 2026-11-08
 
 The metrics pipeline modelled piece by piece, and all four ramps on the cluster. With each pod's sample given its own
