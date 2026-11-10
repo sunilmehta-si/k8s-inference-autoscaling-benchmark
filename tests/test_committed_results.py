@@ -4,7 +4,7 @@ import statistics
 import unittest
 from pathlib import Path
 
-from inference_autoscaling_bench import metrics, report, results, sim, spec, workload
+from inference_autoscaling_bench import compare, metrics, report, results, sim, spec, workload
 from inference_autoscaling_bench.policies import Bounds
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -699,3 +699,20 @@ class KedaModelTests(unittest.TestCase):
             hpa, keda = runs(f"hpa-{signal}"), runs(f"keda-{signal}")
             differ[signal] = sum(hpa[s]["replica_seconds"] != keda[s]["replica_seconds"] for s in hpa)
         self.assertEqual(differ, {"concurrency": 0, "queue": 1, "utilization": 3})
+
+
+class KedaClusterBurstTests(unittest.TestCase):
+    """results/keda/cluster-burst: the HPA and KEDA on each signal on the cluster, one dispatch, three seeds each."""
+    DIR = ROOT / "results" / "keda" / "cluster-burst"
+
+    def test_every_signal_ran_both_ways_on_the_same_three_seeds(self):
+        doc = compare.read(self.DIR)
+        self.assertEqual(sorted((r["policy"], r["seed"]) for r in doc["rows"]),
+                         sorted((f"{scaler}-{signal}", seed) for scaler in ("hpa", "keda")
+                                for signal in ("concurrency", "queue", "utilization") for seed in (1, 2, 3)))
+        for row in doc["rows"]:
+            self.assertEqual(row["config"], {"startup_s": 45.0, "min_replicas": 2, "max_replicas": 32, "down_window_s": 300.0,
+                                             "workload": "burst"})
+
+    def test_the_readme_regenerates_from_the_runs(self):
+        self.assertEqual((self.DIR / "README.md").read_text(), compare.markdown(compare.read(self.DIR)))
