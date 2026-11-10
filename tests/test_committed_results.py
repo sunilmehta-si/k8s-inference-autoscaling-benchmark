@@ -781,3 +781,18 @@ class KedaClaimTests(unittest.TestCase):
         then = [r["cluster"]["goodput"] for r in first]
         self.assertTrue(all(abs(a - b) < 0.01 for a, b in zip(now, then)))
         self.assertIn(f"served {self.pct(now)} against {self.pct(then)}", FLAT)
+
+
+class KedaClusterRampTests(unittest.TestCase):
+    """results/keda/cluster-ramp-30: the HPA and KEDA on concurrency and utilization on the 30 s ramp, three seeds each."""
+    DIR = ROOT / "results" / "keda" / "cluster-ramp-30"
+
+    def test_both_signals_ran_both_ways_on_the_same_three_seeds(self):
+        doc = compare.read(self.DIR)
+        self.assertEqual(sorted((r["policy"], r["seed"]) for r in doc["rows"]),
+                         sorted((f"{scaler}-{signal}", seed) for scaler in ("hpa", "keda")
+                                for signal in ("concurrency", "utilization") for seed in (1, 2, 3)))
+        self.assertEqual({r["config"]["workload"] for r in doc["rows"]}, {"ramp-30"})
+
+    def test_the_readme_regenerates_from_the_runs(self):
+        self.assertEqual((self.DIR / "README.md").read_text(), compare.markdown(compare.read(self.DIR)))
