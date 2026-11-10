@@ -35,6 +35,16 @@ class SimulateLikeTests(unittest.TestCase):
         b = compare.simulate_like(cluster_run(startup=120.0), burst)
         self.assertLess(a["ttft_p95_ms"], b["ttft_p95_ms"])
 
+    def test_a_keda_run_is_simulated_with_its_window_and_the_external_metric(self):
+        run = cluster_run(policy="keda-concurrency", seed=2)
+        run["config"]["down_window_s"] = 60.0
+        got = compare.simulate_like(run, SMOKE)
+        rows, _ = experiment.run_matrix(SMOKE, [spec.parse("keda-concurrency:startup=20,down=60")], [2], Bounds(2, 32))
+        self.assertEqual(got, {k: v for k, v in rows[0].items() if k not in ("policy", "seed")})
+
+    def test_only_an_autoscaler_has_a_scale_down_window(self):
+        self.assertEqual([compare.autoscaled(p) for p in ("hpa-queue", "keda-queue", "static-24")], [True, True, False])
+
     def test_a_static_pool_is_simulated_without_a_scale_down_window(self):
         got = compare.simulate_like(cluster_run(policy="static-4"), SMOKE)
         self.assertEqual((got["peak_replicas"], got["scale_ups"]), (4, 0))

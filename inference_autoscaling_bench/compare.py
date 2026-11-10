@@ -38,6 +38,11 @@ COMPARED = [
 ]
 
 
+def autoscaled(policy: str) -> bool:
+    """Whether a policy has an autoscaler, and so a scale-down window: the HPA's or the one KEDA creates."""
+    return policy.startswith(("hpa-", "keda-"))
+
+
 def load_cluster_runs(directory: str | Path) -> list[dict]:
     runs = [json.loads(p.read_text()) for p in sorted(Path(directory).glob("**/*.json"))]
     runs = [r for r in runs if r.get("summary", {}).get("source") == "cluster"]
@@ -50,7 +55,7 @@ def simulate_like(run: dict, workload: Workload, pod_queues: bool = False, lag_s
     """The simulation's summary for the cluster run's policy, seed and settings."""
     cfg = run["config"]
     policy = run["summary"]["policy"]
-    options = (f"startup={cfg['startup_s']:g}" + (f",down={cfg['down_window_s']:g}" if policy.startswith("hpa-") else "")
+    options = (f"startup={cfg['startup_s']:g}" + (f",down={cfg['down_window_s']:g}" if autoscaled(policy) else "")
                + (",route=pod" if pod_queues else "") + (f",lag={lag_s:g}" if lag_s else "") + (f",scrape={scrape_s:g}" if scrape_s else ""))
     spec = parse(f"{policy}:{options}")
     rows, _ = run_matrix(workload, [spec], [run["summary"]["seed"]], Bounds(cfg["min_replicas"], cfg["max_replicas"]))
@@ -117,7 +122,7 @@ def markdown(doc: dict) -> str:
         cfg = rows[0]["config"]
         lines += [f"### `{policy}`", "",
                   f"{len(rows)} {'seed' if len(rows) == 1 else 'seeds'} ({', '.join(str(r['seed']) for r in rows)}). Pods start in {cfg['startup_s']:g} s"
-                  + (f", scale-down window {cfg['down_window_s']:g} s" if policy.startswith("hpa-") else "") + ".", "",
+                  + (f", scale-down window {cfg['down_window_s']:g} s" if autoscaled(policy) else "") + ".", "",
                   "| Metric | Cluster | One shared queue | Queue per pod | Queue per pod, lag | Queue per pod, scraped "
                   "| Cluster minus one queue | Cluster minus queue per pod | Cluster minus queue per pod, lag "
                   "| Cluster minus queue per pod, scraped |",
