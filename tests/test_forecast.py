@@ -39,6 +39,11 @@ class TrendTests(unittest.TestCase):
         self.assertAlmostEqual(holt.trend, 0.1, places=6)
         self.assertAlmostEqual(holt.forecast(45), 3.0 + 0.1 * (39 * 15 + 45), places=4)
 
+    def test_a_fall_is_never_forecast_below_nothing(self):
+        holt = fed([10.0, 6.0, 2.0, 0.5])
+        self.assertLess(holt.trend, 0)
+        self.assertEqual(holt.forecast(600), 0.0)
+
     def test_a_ramp_is_forecast_above_the_latest_observation_and_a_fall_below_it(self):
         self.assertGreater(fed([1.0, 2.0, 3.0, 4.0]).forecast(45), 4.0)
         self.assertLess(fed([4.0, 3.0, 2.0, 1.0]).forecast(45), 1.0)

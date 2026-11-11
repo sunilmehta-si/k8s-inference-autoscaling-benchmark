@@ -1,7 +1,7 @@
 """A forecast of the arrival rate a little ahead, for a policy that scales before the load arrives.
 
 `Holt` is Holt's linear trend method, the simplest forecaster that can see a ramp coming: it keeps a smoothed level of
-the series and a smoothed trend (change per second), and forecasts `level + trend * h` for `h` seconds ahead. `alpha`
+the series and a smoothed trend (change per second), and forecasts `level + trend * h` for `h` seconds ahead, never below 0. `alpha`
 weighs each new observation against the level's own projection; `beta` weighs each new change of level against the
 trend so far. Both are between 0 and 1: near 1 follows the latest observation, near 0 holds on to the past.
 """
@@ -36,4 +36,6 @@ class Holt:
         """The value forecast `h` seconds after the latest observation (0 before any)."""
         if h < 0:
             raise ValueError("a forecast looks ahead: h cannot be negative")
-        return 0.0 if self.level is None else self.level + self.trend * h
+        if self.level is None:
+            return 0.0
+        return max(0.0, self.level + self.trend * h)   # a falling series ends at nothing, never below
