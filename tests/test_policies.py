@@ -281,3 +281,15 @@ class PredictiveControllerTests(unittest.TestCase):
         p.decide(obs(now=180.0, ready=10, arrival_rate=46.0), BOUNDS)
         self.assertEqual(len(p.history), 1)
         self.assertEqual(len(Predictive("rps").history), 0)
+
+
+class NoReadyPodTests(unittest.TestCase):
+    def test_with_no_ready_pod_it_leaves_the_count_alone_as_the_hpa_does(self):
+        self.assertIsNone(Predictive("concurrency").decide(obs(now=15.0, ready=0, pending=3, queued=50, arrival_rate=9.0), BOUNDS))
+
+    def test_the_forecaster_still_learns_from_a_sync_it_cannot_act_on(self):
+        p = Predictive("rps")
+        p.decide(obs(now=15.0, ready=0, pending=2, arrival_rate=3.0), BOUNDS)
+        p.decide(obs(now=30.0, ready=0, pending=2, arrival_rate=6.0), BOUNDS)
+        self.assertEqual(p.forecaster.at, 30.0)
+        self.assertGreater(p.forecaster.trend, 0)
