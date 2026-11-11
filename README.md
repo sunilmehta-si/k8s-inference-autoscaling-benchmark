@@ -157,6 +157,16 @@ pool of 12 pods and the cluster-like model on the burst and the four ramps, eigh
 The policy, its defaults and the dataset were fixed before the runs ([methodology](docs/methodology.md)). It is a model
 only: no controller on the cluster forecasts.
 
+Goodput (the share of requests whose first token arrives within 2 s), median of eight runs:
+
+| Workload | `hpa-concurrency` | `predict-concurrency` | `warm-12` | `hpa-rps` | `predict-rps` |
+|---|---|---|---|---|---|
+| [Burst](results/predictive/burst/README.md) | 80.3% | 80.3% | 93.5% | 54.0% | 71.5% |
+| [30 s ramp](results/predictive/ramp-30/README.md) | 79.5% | 79.9% | 99.4% | 33.5% | 64.7% |
+| [120 s ramp](results/predictive/ramp-120/README.md) | 88.0% | 88.7% | 99.6% | 34.3% | 68.6% |
+| [300 s ramp](results/predictive/ramp-300/README.md) | 94.6% | 98.4% | 100.0% | 46.8% | 80.4% |
+| [600 s ramp](results/predictive/ramp-600/README.md) | 99.2% | 99.5% | 100.0% | 79.0% | 96.7% |
+
 - **On requests in the system the forecast pays where a ramp is slow enough for one startup ahead to matter.** On the
   300 s ramp `predict-concurrency` serves 98.4% of requests in time against 94.6% for `hpa-concurrency`, with a shorter
   tail (976 ms against 2,286 ms at the 95th percentile), in every run, and costs less in 6 of 8 runs (15,698 against

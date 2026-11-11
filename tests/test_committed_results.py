@@ -948,6 +948,15 @@ class PredictiveClaimTests(unittest.TestCase):
     def med(self, name, policy, key):
         return statistics.median(r[key] for r in self.runs(name, policy).values())
 
+    def test_the_goodput_table_is_the_saved_medians_and_links_each_dataset(self):
+        row = re.compile(r"^\| \[[^\]]+\]\(results/predictive/([\w-]+)/README\.md\) \| (.+) \|$", re.M)
+        found = row.findall(README)
+        self.assertEqual([name for name, _ in found], list(PredictiveDatasetTests.WORKLOADS))
+        policies = ("hpa-concurrency", "predict-concurrency", "warm-12", "hpa-rps", "predict-rps")
+        for name, cells in found:
+            with self.subTest(workload=name):
+                self.assertEqual(cells.split(" | "), [f"{self.med(name, p, 'goodput') * 100:.1f}%" for p in policies])
+
     def test_on_the_300_s_ramp_the_forecast_serves_more_with_a_shorter_tail_in_every_run_and_mostly_costs_less(self):
         self.assertEqual(self.tally("ramp-300", "predict-concurrency", "hpa-concurrency"), (8, 0, 0))
         self.assertEqual(self.tally("ramp-300", "predict-concurrency", "hpa-concurrency", "ttft_p95_ms"), (0, 0, 8))
