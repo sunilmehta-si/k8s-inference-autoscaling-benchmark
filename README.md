@@ -144,6 +144,22 @@ checked against the real autoscaler at every ramp.
   slots, whose capped steps pay the lag several times over; some delay on the cluster is in neither model.
 - **Headroom still wins outright.** `static-24` serves 99.4–99.6% on every ramp on the cluster, as in every model.
 
+## Scaling ahead of the load
+
+Pod startup is the binding constraint, so the next policy orders pods before the load arrives. `predict-SIGNAL` is the
+HPA on that signal with a forecast beside it: Holt's linear trend method on the arrival rate, one pod startup (45 s)
+ahead, the signal's metric scaled by the rate's forecast growth, and never fewer pods than the HPA asks for, through the
+HPA's own bounds, windows and scale-up limit. [`results/predictive`](results/predictive) runs it beside the HPA, a warm
+pool of 12 pods and the cluster-like model on the burst and the four ramps, eight runs each (`make results-predictive`).
+The policy, its defaults and the dataset were fixed before the runs ([methodology](docs/methodology.md)). It is a model
+only: no controller on the cluster forecasts.
+
+- **On requests in the system the forecast pays where a ramp is slow enough for one startup ahead to matter.** On the
+  300 s ramp `predict-concurrency` serves 98.4% of requests in time against 94.6% for `hpa-concurrency`, with a shorter
+  tail (976 ms against 2,286 ms at the 95th percentile), in every run, and costs less in 6 of 8 runs (15,698 against
+  16,536 replica-seconds at the median). On the 120 s and 600 s ramps it serves more in 7 of 8 runs and the same in
+  the eighth.
+
 ## The cluster stage
 
 [`docs/cluster.md`](docs/cluster.md): the same policies on the same seeded traces on a kind cluster, with the real

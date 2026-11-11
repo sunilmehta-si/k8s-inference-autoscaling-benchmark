@@ -924,3 +924,38 @@ class PredictiveDatasetTests(unittest.TestCase):
                     saved = next(r for r in doc["runs"] if r["policy"] == policy["label"] and r["seed"] == 1)
                     for key in ("goodput", "ttft_p95_ms", "replica_seconds"):
                         self.assertAlmostEqual(saved[key], rows[0][key], delta=abs(rows[0][key]) * 1e-9 + 1e-9, msg=key)
+
+
+class PredictiveClaimTests(unittest.TestCase):
+    """The README's predictive section, claim by claim."""
+
+    def runs(self, name, policy):
+        return {r["seed"]: r for r in results.read(ROOT / "results" / "predictive" / name)["runs"] if r["policy"] == policy}
+
+    def tally(self, name, a, b, key="goodput"):
+        """(runs where a is higher, runs where they are equal, runs where a is lower)."""
+        x, y = self.runs(name, a), self.runs(name, b)
+        higher = sum(x[s][key] > y[s][key] for s in x)
+        equal = sum(x[s][key] == y[s][key] for s in x)
+        return higher, equal, len(x) - higher - equal
+
+    def med(self, name, policy, key):
+        return statistics.median(r[key] for r in self.runs(name, policy).values())
+
+    def test_on_the_300_s_ramp_the_forecast_serves_more_with_a_shorter_tail_in_every_run_and_mostly_costs_less(self):
+        self.assertEqual(self.tally("ramp-300", "predict-concurrency", "hpa-concurrency"), (8, 0, 0))
+        self.assertEqual(self.tally("ramp-300", "predict-concurrency", "hpa-concurrency", "ttft_p95_ms"), (0, 0, 8))
+        self.assertEqual(self.tally("ramp-300", "predict-concurrency", "hpa-concurrency", "replica_seconds"), (2, 0, 6))
+        g = lambda p: f"{self.med('ramp-300', p, 'goodput') * 100:.1f}%"
+        ms = lambda p: f"{self.med('ramp-300', p, 'ttft_p95_ms'):,.0f} ms"
+        cost = lambda p: f"{self.med('ramp-300', p, 'replica_seconds'):,.0f}"
+        self.assertIn(f"`predict-concurrency` serves {g('predict-concurrency')} of requests in time against "
+                      f"{g('hpa-concurrency')} for `hpa-concurrency`, with a shorter tail ({ms('predict-concurrency')} "
+                      f"against {ms('hpa-concurrency')} at the 95th percentile), in every run, and costs less in 6 of 8 "
+                      f"runs ({cost('predict-concurrency')} against {cost('hpa-concurrency')} replica-seconds", FLAT)
+
+    def test_on_the_120_and_600_s_ramps_it_serves_more_in_seven_runs_and_the_same_in_the_eighth(self):
+        for name in ("ramp-120", "ramp-600"):
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "predict-concurrency", "hpa-concurrency"), (7, 1, 0))
+        self.assertIn("On the 120 s and 600 s ramps it serves more in 7 of 8 runs and the same in the eighth.", FLAT)
