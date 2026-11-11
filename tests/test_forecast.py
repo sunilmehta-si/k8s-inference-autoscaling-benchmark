@@ -28,5 +28,27 @@ class LevelTests(unittest.TestCase):
         self.assertAlmostEqual(fed([0.0, 10.0], alpha=1.0).forecast(0), 10.0)
 
 
+class TrendTests(unittest.TestCase):
+    def test_one_observation_has_no_trend(self):
+        self.assertEqual(fed([7.0]).trend, 0.0)
+
+    def test_a_linear_ramp_is_learned_and_extrapolated(self):
+        # 3 requests per second rising by 0.1 each second: after enough syncs the trend is the slope, and the forecast
+        # 45 s ahead is where the ramp will be then.
+        holt = fed([3.0 + 0.1 * 15 * i for i in range(40)])
+        self.assertAlmostEqual(holt.trend, 0.1, places=6)
+        self.assertAlmostEqual(holt.forecast(45), 3.0 + 0.1 * (39 * 15 + 45), places=4)
+
+    def test_a_ramp_is_forecast_above_the_latest_observation_and_a_fall_below_it(self):
+        self.assertGreater(fed([1.0, 2.0, 3.0, 4.0]).forecast(45), 4.0)
+        self.assertLess(fed([4.0, 3.0, 2.0, 1.0]).forecast(45), 1.0)
+
+    def test_beta_weighs_a_change_of_level_against_the_trend_so_far(self):
+        # From level 0 to 10 in one 15 s step with alpha 1: the level moved 10/15 per second, and beta of that is kept.
+        self.assertAlmostEqual(fed([0.0, 10.0], alpha=1.0, beta=0.3).trend, 0.3 * 10 / 15)
+        self.assertAlmostEqual(fed([0.0, 10.0], alpha=1.0, beta=1.0).trend, 10 / 15)
+        self.assertEqual(fed([0.0, 10.0], alpha=1.0, beta=0.0).trend, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

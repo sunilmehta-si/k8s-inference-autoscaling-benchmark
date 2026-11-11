@@ -9,9 +9,10 @@ from __future__ import annotations
 
 
 class Holt:
-    def __init__(self, alpha: float = 0.5):
-        self.alpha = alpha
+    def __init__(self, alpha: float = 0.5, beta: float = 0.3):
+        self.alpha, self.beta = alpha, beta
         self.level: float | None = None
+        self.trend = 0.0   # change of the level per second
         self.at: float | None = None
 
     def update(self, t: float, value: float) -> None:
@@ -19,9 +20,12 @@ class Holt:
         if self.level is None:
             self.level, self.at = value, t
             return
-        self.level = self.alpha * value + (1 - self.alpha) * self.level
+        dt = t - self.at
+        previous = self.level
+        self.level = self.alpha * value + (1 - self.alpha) * (previous + self.trend * dt)
+        self.trend = self.beta * (self.level - previous) / dt + (1 - self.beta) * self.trend
         self.at = t
 
     def forecast(self, h: float) -> float:
         """The value forecast `h` seconds after the latest observation (0 before any)."""
-        return 0.0 if self.level is None else self.level
+        return 0.0 if self.level is None else self.level + self.trend * h
