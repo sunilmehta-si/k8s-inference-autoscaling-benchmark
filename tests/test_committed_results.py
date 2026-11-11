@@ -1055,3 +1055,12 @@ class PredictiveClaimTests(unittest.TestCase):
         behind = ", ".join(g(n, "cluster-like") for n in names[:2]) + f" and {g(names[2], 'cluster-like')}"
         self.assertIn(f"and 600 s ramps ({ahead} against {behind}), and stays below the one-queue `hpa-concurrency` "
                       "in at least 7 of 8 runs of every workload.", FLAT)
+
+    def test_the_changelog_quotes_the_same_numbers(self):
+        changelog = " ".join((ROOT / "CHANGELOG.md").read_text().split())
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("## [0.7.0]")]
+        g = lambda p: f"{self.med('ramp-300', p, 'goodput') * 100:.1f}%"
+        self.assertIn(f"serves {g('predict-concurrency')} in time against {g('hpa-concurrency')}", unreleased)
+        self.assertIn("costs less in 6 of 8", unreleased)
+        self.assertEqual(self.tally("burst", "warm-12", "predict-concurrency"), (8, 0, 0))
+        self.assertIn("`warm-12` wins every run", unreleased)
