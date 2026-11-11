@@ -1,6 +1,6 @@
 import unittest
 
-from inference_autoscaling_bench.policies import Bounds, Hpa, Observation, Static
+from inference_autoscaling_bench.policies import Bounds, Hpa, Observation, Predictive, Static
 
 BOUNDS = Bounds(min_replicas=2, max_replicas=32)
 
@@ -157,3 +157,40 @@ class ConstructionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def ramp(policy, rates, ready=4, step=15.0):
+    """Feed a predictive policy one sync per rate, with the pods fixed, and return its last decision."""
+    decision = None
+    for i, rate in enumerate(rates, start=1):
+        decision = policy.decide(obs(now=i * step, ready=ready, arrival_rate=rate), BOUNDS)
+    return decision
+
+
+class PredictiveTests(unittest.TestCase):
+    def test_a_steady_rate_is_scaled_for_as_the_hpa_does(self):
+        self.assertEqual(ramp(Predictive("rps"), [5.6] * 10), ramp(Hpa("rps"), [5.6] * 10))
+
+    def test_a_rising_rate_is_scaled_for_one_horizon_ahead(self):
+        # 1 request per second more every 15 s on 10 pods: at 13 per second the HPA sees 0.93 of its target and holds,
+        # while the forecast 45 s ahead is about 16 per second, ceil(16.1 / 1.4) = 12 pods.
+        rates = [2.0 + i for i in range(12)]
+        self.assertEqual(ramp(Hpa("rps"), rates, ready=10), 10)
+        self.assertEqual(ramp(Predictive("rps"), rates, ready=10), 12)
+
+    def test_it_never_asks_for_less_than_the_hpa_would(self):
+        falling = [20.0 - i for i in range(15)]
+        p, h = Predictive("rps"), Hpa("rps")
+        for i, rate in enumerate(falling, start=1):
+            o = obs(now=i * 15.0, ready=12, arrival_rate=rate)
+            self.assertGreaterEqual(p.decide(o, BOUNDS), h.decide(o, BOUNDS))
+
+    def test_it_is_named_after_its_signal(self):
+        self.assertEqual(Predictive("rps").name, "predict-rps")
+        self.assertEqual(Predictive("rps", name="ahead").name, "ahead")
+
+    def test_only_the_rate_can_be_forecast_so_far_and_the_horizon_cannot_be_negative(self):
+        with self.assertRaisesRegex(ValueError, "rps"):
+            Predictive("concurrency")
+        with self.assertRaisesRegex(ValueError, "horizon"):
+            Predictive("rps", horizon_s=-1)

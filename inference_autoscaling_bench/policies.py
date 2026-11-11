@@ -18,6 +18,11 @@ starting, and within the tolerance changes nothing; otherwise it asks for ceil(s
 pods still starting count in the average whatever the direction, and no ready pod is needed for a decision. Steps 4 and
 5 are the same.
 
+`Predictive` is the same controller with a forecast beside it: at every sync it feeds the arrival rate to a forecaster
+(`forecast.Holt`) and asks for the pods the rate forecast `horizon_s` seconds ahead needs, by default one pod startup
+ahead, so pods ordered now are ready when the load arrives. It moves to the larger of that and the HPA's own
+recommendation, then through the same bounds, windows and limit.
+
 Request concurrency, queue depth, slot utilization and request rate are the four signals compared. They are
 inputs to the same controller, so a difference between them is a difference in the signal.
 """
@@ -26,6 +31,8 @@ from __future__ import annotations
 import math
 from collections import deque
 from dataclasses import dataclass
+
+from .forecast import Holt
 
 
 @dataclass(frozen=True)
@@ -142,3 +149,31 @@ class Hpa(Policy):
         if result > current:
             result = min(result, max(current + self.up_pods, math.ceil(current * (1 + self.up_percent / 100))))
         return max(bounds.min_replicas, min(bounds.max_replicas, result))
+
+
+class Predictive(Hpa):
+    def __init__(self, signal: str, horizon_s: float = 45.0, alpha: float = 0.5, beta: float = 0.3,
+                 name: str | None = None, **hpa):
+        if signal != "rps":
+            raise ValueError("a predictive policy forecasts the request rate: use the rps signal")
+        if horizon_s < 0:
+            raise ValueError("the horizon cannot be negative")
+        super().__init__(signal, name=name or f"predict-{signal}", **hpa)
+        self.horizon_s = horizon_s
+        self.forecaster = Holt(alpha, beta)
+
+    def decide(self, obs: Observation, bounds: Bounds) -> int | None:
+        self.forecaster.update(obs.now, obs.arrival_rate)
+        reactive = self.recommend(obs)
+        if reactive is None:
+            return None
+        current = obs.ready + obs.pending
+        return self._remember(obs.now, max(reactive, self.predict(obs)), current, bounds)
+
+    def predict(self, obs: Observation) -> int:
+        """The pods the forecast rate needs at the target, or the current count when that is within the tolerance."""
+        current = obs.ready + obs.pending
+        needed = self.forecaster.forecast(self.horizon_s) / self.target
+        if current and abs(needed / current - 1) <= self.tolerance:
+            return current
+        return math.ceil(needed)
