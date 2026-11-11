@@ -50,5 +50,29 @@ class TrendTests(unittest.TestCase):
         self.assertEqual(fed([0.0, 10.0], alpha=1.0, beta=0.0).trend, 0.0)
 
 
+class ValidationTests(unittest.TestCase):
+    def test_alpha_must_be_above_0_and_at_most_1(self):
+        for alpha in (0.0, -0.1, 1.5):
+            with self.subTest(alpha=alpha), self.assertRaisesRegex(ValueError, "alpha"):
+                Holt(alpha)
+        Holt(1.0)
+
+    def test_beta_must_be_between_0_and_1(self):
+        for beta in (-0.1, 1.01):
+            with self.subTest(beta=beta), self.assertRaisesRegex(ValueError, "beta"):
+                Holt(0.5, beta)
+        Holt(0.5, 0.0), Holt(0.5, 1.0)
+
+    def test_time_must_move_forward(self):
+        holt = fed([1.0, 2.0])
+        for t in (15.0, 10.0):
+            with self.subTest(t=t), self.assertRaisesRegex(ValueError, "forward"):
+                holt.update(t, 3.0)
+
+    def test_a_forecast_cannot_look_back(self):
+        with self.assertRaisesRegex(ValueError, "negative"):
+            fed([1.0]).forecast(-1)
+
+
 if __name__ == "__main__":
     unittest.main()
