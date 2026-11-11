@@ -87,9 +87,11 @@ targets were chosen before any run was compared and were not tuned; the datasets
 python3 -m venv .venv && . .venv/bin/activate && pip install -e .      # no dependencies, Python 3.10 or later
 iab trace workloads/burst.json                                         # what the trace looks like
 iab run workloads/burst.json -p static-24 -p hpa-concurrency -p hpa-queue
+iab run workloads/ramp-300.json -p hpa-concurrency -p predict-concurrency   # react, or scale ahead of the load
 iab matrix workloads/burst.json --runs 8 --out /tmp/mine -p hpa-concurrency -p "slow=hpa-concurrency:startup=120"
 make test                                                              # the unit tests
 make results                                                           # regenerate every dataset; git diff shows any change
+make results-predictive                                                # the predictive dataset, also checked in CI
 ```
 
 `iab matrix` writes `runs.json` (every run), `README.md` (the tables) and `chart.svg`. `iab report DIR` renders the

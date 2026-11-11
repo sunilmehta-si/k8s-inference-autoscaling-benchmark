@@ -36,6 +36,12 @@ class CommandTests(unittest.TestCase):
         self.assertIn("modelled only", str(code))
         run.assert_not_called()
 
+    def test_the_readmes_predictive_quick_start_runs(self):
+        code, out, _ = run_cli("run", str(ROOT / "workloads/ramp-300.json"), "-p", "hpa-concurrency", "-p", "predict-concurrency")
+        self.assertEqual(code, 0)
+        self.assertIn("predict-concurrency: ", out)
+        self.assertIn("iab run workloads/ramp-300.json -p hpa-concurrency -p predict-concurrency", (ROOT / "README.md").read_text())
+
     def test_policies_lists_predict_on_every_signal_and_its_options(self):
         code, out, _ = run_cli("policies")
         self.assertEqual(code, 0)
