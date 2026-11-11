@@ -1,3 +1,4 @@
+import random
 import unittest
 
 from inference_autoscaling_bench.forecast import Holt
@@ -53,6 +54,33 @@ class TrendTests(unittest.TestCase):
         self.assertAlmostEqual(fed([0.0, 10.0], alpha=1.0, beta=0.3).trend, 0.3 * 10 / 15)
         self.assertAlmostEqual(fed([0.0, 10.0], alpha=1.0, beta=1.0).trend, 10 / 15)
         self.assertEqual(fed([0.0, 10.0], alpha=1.0, beta=0.0).trend, 0.0)
+
+
+class BehaviourTests(unittest.TestCase):
+    """What the default forecaster does with the shapes the workloads have, at the HPA's 15 s sync."""
+
+    def test_the_trend_is_per_second_so_the_sync_period_does_not_change_a_learned_ramp(self):
+        slow = fed([3.0 + 0.1 * 15 * i for i in range(40)], step=15.0)
+        fast = fed([3.0 + 0.1 * 5 * i for i in range(120)], step=5.0)
+        self.assertAlmostEqual(slow.trend, fast.trend, places=6)
+
+    def test_after_a_step_the_forecast_overshoots_then_settles_on_the_new_level(self):
+        holt = fed([3.0] * 10 + [20.0] * 30)
+        self.assertAlmostEqual(holt.forecast(45), 20.0, places=2)
+        overshoot = fed([3.0] * 10 + [20.0] * 3).forecast(45)
+        self.assertGreater(overshoot, 20.0)   # the trend learned on the step carries on for a while
+
+    def test_a_step_is_followed_within_a_few_syncs(self):
+        holt = fed([3.0] * 10)
+        for i in range(4):
+            holt.update((10 + i) * 15.0, 20.0)
+        self.assertGreater(holt.forecast(0), 17.0)
+
+    def test_noise_around_a_constant_rate_keeps_the_forecast_near_it(self):
+        rng = random.Random(7)
+        holt = fed([10.0 + rng.uniform(-1.0, 1.0) for _ in range(200)])
+        self.assertLess(abs(holt.forecast(45) - 10.0), 3.0)
+        self.assertLess(abs(holt.trend), 0.05)
 
 
 class ValidationTests(unittest.TestCase):
