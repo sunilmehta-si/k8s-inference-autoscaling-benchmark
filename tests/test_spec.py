@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 from inference_autoscaling_bench import experiment, spec, workload
-from inference_autoscaling_bench.policies import Hpa, Static
+from inference_autoscaling_bench.policies import Hpa, Predictive, Static
 from tests.helpers import tiny_workload
 
 
@@ -78,6 +78,85 @@ class KedaSpecTests(unittest.TestCase):
     def test_an_unknown_keda_signal_is_refused(self):
         with self.assertRaisesRegex(ValueError, r"keda-<"):
             spec.parse("keda-gpu")
+
+class PredictSpecTests(unittest.TestCase):
+    def test_predict_is_the_predictive_policy_on_a_signal(self):
+        policy = spec.parse("predict-concurrency").make()
+        self.assertIsInstance(policy, Predictive)
+        self.assertEqual((policy.signal, policy.target, policy.name, policy.floor), ("concurrency", 6.0, "predict-concurrency", True))
+
+    def test_it_looks_one_pod_startup_ahead_by_default(self):
+        self.assertEqual(spec.parse("predict-rps").make().horizon_s, 45.0)
+        self.assertEqual(spec.parse("predict-rps:startup=120").make().horizon_s, 120.0)
+
+    def test_it_takes_the_hpas_options(self):
+        s = spec.parse("ahead=predict-queue:target=2,down=60,up_pods=8,min=6")
+        policy = s.make()
+        self.assertEqual((policy.target, policy.down_window_s, policy.up_pods, policy.name, s.min_replicas), (2.0, 60.0, 8, "ahead", 6))
+
+    def test_the_horizon_and_the_forecasters_weights_can_be_set(self):
+        policy = spec.parse("predict-rps:horizon=90,alpha=0.3,beta=0.1").make()
+        self.assertEqual((policy.horizon_s, policy.forecaster.alpha, policy.forecaster.beta), (90.0, 0.3, 0.1))
+        self.assertEqual(spec.parse("predict-rps:startup=120,horizon=30").make().horizon_s, 30.0)
+        self.assertEqual(spec.parse("predict-rps:horizon=0").make().horizon_s, 0.0)
+
+    def test_the_defaults_are_the_ones_chosen_before_any_dataset(self):
+        policy = spec.parse("predict-concurrency").make()
+        self.assertEqual((policy.forecaster.alpha, policy.forecaster.beta), (0.5, 0.3))
+
+    def test_a_bad_horizon_alpha_or_beta_is_refused_when_the_spec_is_read(self):
+        for text, reason in (("predict-rps:horizon=-5", "horizon"), ("predict-rps:alpha=0", "alpha"),
+                             ("predict-rps:alpha=2", "alpha"), ("predict-rps:beta=-1", "beta"),
+                             ("predict-rps:horizon=soon", "must be a number")):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, reason):
+                spec.parse(text)
+
+    def test_forecast_options_belong_to_predict_only(self):
+        for text in ("hpa-rps:horizon=60", "keda-rps:alpha=0.5", "static-4:beta=0.2"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                spec.parse(text)
+
+    def test_the_floor_is_the_hpa_unless_the_spec_lifts_it(self):
+        self.assertTrue(spec.parse("predict-rps").make().floor)
+        self.assertTrue(spec.parse("predict-rps:floor=hpa").make().floor)
+        self.assertFalse(spec.parse("predict-rps:floor=none").make().floor)
+        with self.assertRaisesRegex(ValueError, "floor must be"):
+            spec.parse("predict-rps:floor=static")
+        with self.assertRaisesRegex(ValueError, "unknown option"):
+            spec.parse("hpa-rps:floor=none")
+
+    def test_route_lag_and_scrape_reach_a_predictive_run(self):
+        s = spec.parse("predict-concurrency:route=pod,scrape=15")
+        self.assertEqual((s.pod_queues, s.scrape_s), (True, 15.0))
+        self.assertEqual(spec.parse("predict-concurrency:lag=30").metrics_lag_s, 30.0)
+        with self.assertRaisesRegex(ValueError, "not both"):
+            spec.parse("predict-concurrency:lag=30,scrape=15")
+
+    def test_the_matrix_runs_a_predictive_spec_beside_the_hpa_on_the_same_trace(self):
+        w = workload.load(Path(__file__).resolve().parent.parent / "workloads/ramp-120.json")
+        rows, _ = experiment.run_matrix(w, [spec.parse("hpa-concurrency"), spec.parse("predict-concurrency"),
+                                            spec.parse("lagged=predict-concurrency:lag=30")], [1])
+        self.assertEqual(len({r["requests"] for r in rows}), 1)
+        self.assertNotEqual(rows[0]["replica_seconds"], rows[1]["replica_seconds"])
+        self.assertNotEqual(rows[1]["replica_seconds"], rows[2]["replica_seconds"])
+
+    def test_the_modules_examples_parse(self):
+        doc = spec.__doc__.split("Keys:")[0]
+        for line in doc.splitlines()[1:]:
+            text = line.strip().split(" ")[0]
+            if text:
+                with self.subTest(text=text):
+                    spec.parse(text)
+        self.assertIn("predict-concurrency", doc)
+
+    def test_every_make_is_a_fresh_forecaster(self):
+        s = spec.parse("predict-rps")
+        self.assertIsNot(s.make().forecaster, s.make().forecaster)
+
+    def test_an_unknown_signal_names_the_predict_family(self):
+        with self.assertRaisesRegex(ValueError, r"predict-<"):
+            spec.parse("predict-gpu")
+
 
 class MatrixTests(unittest.TestCase):
     def test_every_policy_runs_on_every_seed_and_shares_the_trace(self):

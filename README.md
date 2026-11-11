@@ -38,6 +38,10 @@ first-token objective:
   of seconds to start can drain it, so faster pods (a cached image and model) are worth more than a cleverer signal.
 - **Standing headroom is the cheapest lever.** Keeping at least 12 pods instead of 2 lifts goodput to 93.5% for about
   3% more replica-seconds, because the autoscaler scales up to the ceiling during the burst either way.
+- **Scaling ahead of the load helps only where the ramp is slow enough.** A policy that scales for the request rate
+  forecast one pod startup ahead serves 98.4% in time on a five-minute ramp, against 94.6% for the HPA, in every run
+  and mostly for less; on the 30 s ramp the HPA already asks for more pods than its scale-up limit allows, so the
+  forecast changes almost nothing, and standing headroom wins ([below](#scaling-ahead-of-the-load)).
 - **A shorter scale-down window saves a lot and costs a lot.** A 30 second window cuts cost by 41% and flaps 16 times,
   and goodput falls from 80.3% to 64.1%.
 
@@ -70,8 +74,11 @@ A test regenerates every table, chart and number on this page from the saved res
 | `hpa-concurrency` | The HPA on requests in the system (running plus waiting) per pod, target 6. |
 | `hpa-queue` | The HPA on requests waiting per pod, target 1. |
 | `hpa-rps` | The HPA on requests per second over the last 30 s, per pod, target 1.4. |
+| `predict-SIGNAL` | The HPA on that signal with a forecast of the request rate one pod startup ahead beside it; never fewer pods than the HPA asks for. A model only. |
 
-Any spec takes options after a colon: `hpa-queue:target=2,down=60,startup=120,min=6`. `iab policies` lists them. The
+Any spec takes options after a colon: `hpa-queue:target=2,down=60,startup=120,min=6`. `iab policies` lists them. A
+predictive spec also takes `horizon` (seconds ahead), `alpha` and `beta` (the forecaster's weights) and `floor=none`
+(the forecast alone decides). The
 targets were chosen before any run was compared and were not tuned; the datasets above show what changing one does.
 
 ## Quick start
@@ -80,9 +87,11 @@ targets were chosen before any run was compared and were not tuned; the datasets
 python3 -m venv .venv && . .venv/bin/activate && pip install -e .      # no dependencies, Python 3.10 or later
 iab trace workloads/burst.json                                         # what the trace looks like
 iab run workloads/burst.json -p static-24 -p hpa-concurrency -p hpa-queue
+iab run workloads/ramp-300.json -p hpa-concurrency -p predict-concurrency   # react, or scale ahead of the load
 iab matrix workloads/burst.json --runs 8 --out /tmp/mine -p hpa-concurrency -p "slow=hpa-concurrency:startup=120"
 make test                                                              # the unit tests
 make results                                                           # regenerate every dataset; git diff shows any change
+make results-predictive                                                # the predictive dataset, also checked in CI
 ```
 
 `iab matrix` writes `runs.json` (every run), `README.md` (the tables) and `chart.svg`. `iab report DIR` renders the
@@ -143,6 +152,48 @@ checked against the real autoscaler at every ramp.
   ramp's median. So the worst case of the pipeline fits requests in the system, and the pipeline itself fits busy
   slots, whose capped steps pay the lag several times over; some delay on the cluster is in neither model.
 - **Headroom still wins outright.** `static-24` serves 99.4–99.6% on every ramp on the cluster, as in every model.
+
+## Scaling ahead of the load
+
+Pod startup is the binding constraint, so the next policy orders pods before the load arrives. `predict-SIGNAL` is the
+HPA on that signal with a forecast beside it: Holt's linear trend method on the arrival rate, one pod startup (45 s)
+ahead, the signal's metric scaled by the rate's forecast growth, and never fewer pods than the HPA asks for, through the
+HPA's own bounds, windows and scale-up limit. [`results/predictive`](results/predictive) runs it beside the HPA, a warm
+pool of 12 pods and the cluster-like model on the burst and the four ramps, eight runs each (`make results-predictive`).
+The policy, its defaults and the dataset were fixed before the runs ([methodology](docs/methodology.md)). It is a model
+only: no controller on the cluster forecasts.
+
+Goodput (the share of requests whose first token arrives within 2 s), median of eight runs:
+
+| Workload | `hpa-concurrency` | `predict-concurrency` | `warm-12` | `hpa-rps` | `predict-rps` |
+|---|---|---|---|---|---|
+| [Burst](results/predictive/burst/README.md) | 80.3% | 80.3% | 93.5% | 54.0% | 71.5% |
+| [30 s ramp](results/predictive/ramp-30/README.md) | 79.5% | 79.9% | 99.4% | 33.5% | 64.7% |
+| [120 s ramp](results/predictive/ramp-120/README.md) | 88.0% | 88.7% | 99.6% | 34.3% | 68.6% |
+| [300 s ramp](results/predictive/ramp-300/README.md) | 94.6% | 98.4% | 100.0% | 46.8% | 80.4% |
+| [600 s ramp](results/predictive/ramp-600/README.md) | 99.2% | 99.5% | 100.0% | 79.0% | 96.7% |
+
+- **On requests in the system the forecast pays where a ramp is slow enough for one startup ahead to matter.** On the
+  300 s ramp `predict-concurrency` serves 98.4% of requests in time against 94.6% for `hpa-concurrency`, with a shorter
+  tail (976 ms against 2,286 ms at the 95th percentile), in every run, and costs less in 6 of 8 runs (15,698 against
+  16,536 replica-seconds at the median). On the 120 s and 600 s ramps it serves more in 7 of 8 runs and the same in
+  the eighth.
+- **On the fastest ramps it changes almost nothing, because the HPA already asks for more than it may add.** On the
+  burst and the 30 s ramp, from the ramp's second sync until the pool reaches its 32-pod ceiling, the HPA's own
+  recommendation is above the scale-up limit (+4 pods or doubling) in the first run, so the forecast's larger ask is cut
+  to the same count and the two make the same decisions through the ramp. `predict-concurrency` serves the same share as
+  `hpa-concurrency` in 5 of 8 runs of the burst and 7 of 8 of the 30 s ramp.
+- **Standing headroom still wins where the ramp is fast; the forecast is the cheaper lever where it is slow.** `warm-12`
+  serves more than `predict-concurrency` in every run on the burst and the 30 s and 120 s ramps. On the 300 s and 600 s
+  ramps the forecast costs less in every run (15,698 against 17,685 and 18,428 against 21,660 replica-seconds at the
+  median) and gives up 1.6 and 0.5 points of goodput.
+- **On the rate signal the forecast is worth the most, and it is still not enough.** `predict-rps` serves more than
+  `hpa-rps` in every run of every workload (71.5% against 54.0% on the burst, 80.4% against 46.8% on the 300 s ramp,
+  96.7% against 79.0% on the 600 s ramp), and stays below `hpa-concurrency` in every run of every workload.
+- **With the cluster's queue per pod and sampled pipeline, the forecast helps on the slower ramps too, and does not make
+  up for the queue per pod.** `predict-cluster-like` serves more than `cluster-like` in every run on the 120 s, 300 s
+  and 600 s ramps (86.4%, 93.5% and 94.1% against 84.8%, 90.9% and 91.8%), and stays below the one-queue
+  `hpa-concurrency` in at least 7 of 8 runs of every workload.
 
 ## The cluster stage
 
@@ -238,8 +289,9 @@ would change: on concurrency nothing, in all eight seeds; on utilization 1.5 poi
 The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, a model
 with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points, four ramps that show
 where reactive scaling is enough, all four ramps on the cluster, and a model in which each pod's sample has its own age,
-which places the ramps' utilization flip where the cluster does, and KEDA and the external HPA reading the same signals,
-are built. Not yet built: a predictive policy.
+which places the ramps' utilization flip where the cluster does, KEDA and the external HPA reading the same signals,
+and a predictive policy that scales for the request rate one pod startup ahead, in the model, are built. Not yet built:
+a forecasting controller on the cluster, so the predictive policy is not checked against the real thing.
 
 ## Related projects
 

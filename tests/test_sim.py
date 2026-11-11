@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 from inference_autoscaling_bench import sim, workload
-from inference_autoscaling_bench.policies import Bounds, Hpa, Static
+from inference_autoscaling_bench.policies import Bounds, Hpa, Predictive, Static
 from tests.helpers import Scripted, tiny_workload, trace
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -284,3 +284,37 @@ class ScrapeTests(unittest.TestCase):
             sim.simulate(trace(*self.ROWS), tiny_workload(90), Static(1), sim.Replica(), ONE, scrape_s=-1)
         with self.assertRaisesRegex(ValueError, "not both"):
             sim.simulate(trace(*self.ROWS), tiny_workload(90), Static(1), sim.Replica(), ONE, metrics_lag_s=30, scrape_s=15)
+
+
+class PredictiveRunTests(unittest.TestCase):
+    """The predictive policy in a whole run: it orders pods for the ramp earlier than the HPA does."""
+
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def ordered_by(self, run, t):
+        return sum(change for second, change in run.events if second <= t and change > 0)
+
+    def test_on_the_two_minute_ramp_it_has_ordered_more_pods_a_minute_in(self):
+        w = workload.load(self.ROOT / "workloads/ramp-120.json")
+        trace_ = workload.generate(w, 1)
+        for signal in ("concurrency", "rps"):
+            with self.subTest(signal=signal):
+                hpa = sim.simulate(trace_, w, Hpa(signal))
+                ahead = sim.simulate(trace_, w, Predictive(signal))
+                self.assertGreater(self.ordered_by(ahead, 360.0), self.ordered_by(hpa, 360.0))
+                self.assertGreaterEqual(ahead.replica_seconds, hpa.replica_seconds)
+
+    def test_on_a_flat_rate_it_decides_as_the_hpa_does(self):
+        w = tiny_workload(duration=600)
+        trace_ = workload.generate(w, 3)
+        hpa = sim.simulate(trace_, w, Hpa("concurrency"))
+        ahead = sim.simulate(trace_, w, Predictive("concurrency"))
+        self.assertEqual(ahead.events, hpa.events)
+
+    def test_it_runs_with_a_queue_per_pod_and_either_metrics_pipeline(self):
+        w = workload.load(self.ROOT / "workloads/smoke.json")
+        trace_ = workload.generate(w, 1)
+        for options in ({"pod_queues": True}, {"metrics_lag_s": 30.0}, {"pod_queues": True, "scrape_s": 15.0}):
+            with self.subTest(options=options):
+                run = sim.simulate(trace_, w, Predictive("concurrency"), route_seed=1, **options)
+                self.assertEqual(len(run.ttft), len(trace_))

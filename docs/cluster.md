@@ -2,6 +2,8 @@
 
 The simulation compares autoscaling settings on a model. The cluster stage runs the same policies, on the same seeded
 traces, on a real Kubernetes control plane, so the model can be checked against something that is not the model.
+It runs `static-N`, `hpa-`, `keda-` and `external-` policies. A `predict-` policy is modelled only: no controller on the
+cluster forecasts, and `iab cluster-run` refuses one before it touches a cluster.
 
 ## What runs
 

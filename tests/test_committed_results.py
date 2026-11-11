@@ -92,6 +92,27 @@ class ReadmeTests(unittest.TestCase):
                       f"and flaps {median('down-window', 'conc-down-30', 'flaps'):.0f} times", FLAT)
         self.assertIn(f"from {median('down-window', 'conc-down-300', 'goodput') * 100:.1f}% to {median('down-window', 'conc-down-30', 'goodput') * 100:.1f}%", FLAT)
 
+    def test_the_policy_table_lists_the_predictive_policy_and_its_options_parse(self):
+        self.assertIn("| `predict-SIGNAL` |", README)
+        for option in ("`horizon`", "`alpha`", "`beta`", "`floor=none`"):
+            self.assertIn(option, FLAT)
+        spec.parse("predict-concurrency:horizon=90,alpha=0.3,beta=0.1,floor=none")
+
+    def test_the_short_answer_quotes_the_predictive_dataset(self):
+        m = lambda p: statistics.median(r["goodput"] for r in results.read(ROOT / "results/predictive/ramp-300")["runs"] if r["policy"] == p) * 100
+        self.assertIn(f"serves {m('predict-concurrency'):.1f}% in time on a five-minute ramp, against {m('hpa-concurrency'):.1f}% for the HPA", FLAT)
+        self.assertIn("## Scaling ahead of the load", README)
+
+    def test_the_methodology_no_longer_says_there_is_no_predictive_scaling(self):
+        methodology = " ".join((ROOT / "docs" / "methodology.md").read_text().split())
+        self.assertNotIn("There is no Knative or predictive scaling", methodology)
+        self.assertIn("the predictive policy is one simple forecaster in the model", methodology)
+
+    def test_the_status_says_the_predictive_policy_is_built_in_the_model_only(self):
+        self.assertNotIn("Not yet built: a predictive policy", FLAT)
+        self.assertIn("a predictive policy that scales for the request rate one pod startup ahead, in the model, are built", FLAT)
+        self.assertIn("so the predictive policy is not checked against the real thing", FLAT)
+
     def test_the_claim_that_concurrency_beat_the_others_in_every_run_is_true(self):
         doc = results.read(ROOT / "results/signals")
         beaten = report.held(doc, "goodput", "higher")["hpa-concurrency"]
@@ -874,3 +895,172 @@ class KedaSecondDispatchClaimTests(unittest.TestCase):
         second = [k > h for h, k in zip(self.goodput(self.SECOND, "hpa-utilization"), self.goodput(self.SECOND, "keda-utilization"))]
         self.assertEqual((first, second), ([True] * 3, [False] * 3))
         self.assertNotIn("most of that is the path", FLAT)
+
+
+class PredictiveDatasetTests(unittest.TestCase):
+    """results/predictive: the HPA beside the predictive policy on the burst and the four ramps."""
+
+    WORKLOADS = ("burst", "ramp-30", "ramp-120", "ramp-300", "ramp-600")
+    LABELS = ["static-24", "hpa-concurrency", "predict-concurrency", "hpa-rps", "predict-rps", "warm-12", "cluster-like",
+              "predict-cluster-like"]
+
+    def test_every_dataset_is_the_makefiles_and_regenerates_exactly(self):
+        from inference_autoscaling_bench import chart
+        self.assertEqual(sorted(p.parent.name for p in (ROOT / "results" / "predictive").glob("*/runs.json")), sorted(self.WORKLOADS))
+        self.assertIn("for w in " + " ".join(self.WORKLOADS) + ";", (ROOT / "Makefile").read_text())
+        for name in self.WORKLOADS:
+            with self.subTest(workload=name):
+                d = ROOT / "results" / "predictive" / name
+                doc = results.read(d)
+                self.assertEqual([p["label"] for p in doc["policies"]], self.LABELS)
+                self.assertEqual(sorted((r["policy"], r["seed"]) for r in doc["runs"]),
+                                 sorted((label, seed) for label in self.LABELS for seed in range(1, 9)))
+                self.assertEqual((d / "README.md").read_text(), report.markdown(doc))
+                self.assertEqual((d / "chart.svg").read_text(), chart.svg(doc))
+
+    def test_ci_regenerates_the_dataset_and_fails_on_any_difference(self):
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        reproduce = ci[ci.index("  reproduce:"):]
+        self.assertIn("make results-predictive", reproduce)
+        self.assertLess(reproduce.index("make results-predictive"), reproduce.index("git diff --exit-code -- results"))
+
+    def test_the_policies_are_the_ones_the_methodology_fixed_before_the_runs(self):
+        doc = results.read(ROOT / "results" / "predictive" / "burst")
+        texts = {p["label"]: p["text"] for p in doc["policies"]}
+        self.assertEqual(texts["predict-concurrency"], "predict-concurrency")
+        self.assertEqual(texts["warm-12"], "warm-12=hpa-concurrency:min=12")
+        self.assertEqual(texts["predict-cluster-like"], "predict-cluster-like=predict-concurrency:route=pod,scrape=15")
+        methodology = " ".join((ROOT / "docs" / "methodology.md").read_text().split())
+        for label in self.LABELS:
+            self.assertIn(f"`{label}`", methodology)
+
+    def test_the_first_run_of_every_policy_is_reproduced_from_its_spec(self):
+        from inference_autoscaling_bench.experiment import run_matrix
+        for name in self.WORKLOADS:
+            doc = results.read(ROOT / "results" / "predictive" / name)
+            w = workload.load(ROOT / "workloads" / f"{name}.json")
+            for policy in doc["policies"]:
+                with self.subTest(workload=name, policy=policy["label"]):
+                    rows, _ = run_matrix(w, [spec.parse(policy["text"])], [1], Bounds(policy["min_replicas"], doc["bounds"]["max_replicas"]))
+                    saved = next(r for r in doc["runs"] if r["policy"] == policy["label"] and r["seed"] == 1)
+                    for key in ("goodput", "ttft_p95_ms", "replica_seconds"):
+                        self.assertAlmostEqual(saved[key], rows[0][key], delta=abs(rows[0][key]) * 1e-9 + 1e-9, msg=key)
+
+
+class PredictiveClaimTests(unittest.TestCase):
+    """The README's predictive section, claim by claim."""
+
+    def runs(self, name, policy):
+        return {r["seed"]: r for r in results.read(ROOT / "results" / "predictive" / name)["runs"] if r["policy"] == policy}
+
+    def tally(self, name, a, b, key="goodput"):
+        """(runs where a is higher, runs where they are equal, runs where a is lower)."""
+        x, y = self.runs(name, a), self.runs(name, b)
+        higher = sum(x[s][key] > y[s][key] for s in x)
+        equal = sum(x[s][key] == y[s][key] for s in x)
+        return higher, equal, len(x) - higher - equal
+
+    def med(self, name, policy, key):
+        return statistics.median(r[key] for r in self.runs(name, policy).values())
+
+    def test_the_goodput_table_is_the_saved_medians_and_links_each_dataset(self):
+        row = re.compile(r"^\| \[[^\]]+\]\(results/predictive/([\w-]+)/README\.md\) \| (.+) \|$", re.M)
+        found = row.findall(README)
+        self.assertEqual([name for name, _ in found], list(PredictiveDatasetTests.WORKLOADS))
+        policies = ("hpa-concurrency", "predict-concurrency", "warm-12", "hpa-rps", "predict-rps")
+        for name, cells in found:
+            with self.subTest(workload=name):
+                self.assertEqual(cells.split(" | "), [f"{self.med(name, p, 'goodput') * 100:.1f}%" for p in policies])
+
+    def test_on_the_300_s_ramp_the_forecast_serves_more_with_a_shorter_tail_in_every_run_and_mostly_costs_less(self):
+        self.assertEqual(self.tally("ramp-300", "predict-concurrency", "hpa-concurrency"), (8, 0, 0))
+        self.assertEqual(self.tally("ramp-300", "predict-concurrency", "hpa-concurrency", "ttft_p95_ms"), (0, 0, 8))
+        self.assertEqual(self.tally("ramp-300", "predict-concurrency", "hpa-concurrency", "replica_seconds"), (2, 0, 6))
+        g = lambda p: f"{self.med('ramp-300', p, 'goodput') * 100:.1f}%"
+        ms = lambda p: f"{self.med('ramp-300', p, 'ttft_p95_ms'):,.0f} ms"
+        cost = lambda p: f"{self.med('ramp-300', p, 'replica_seconds'):,.0f}"
+        self.assertIn(f"`predict-concurrency` serves {g('predict-concurrency')} of requests in time against "
+                      f"{g('hpa-concurrency')} for `hpa-concurrency`, with a shorter tail ({ms('predict-concurrency')} "
+                      f"against {ms('hpa-concurrency')} at the 95th percentile), in every run, and costs less in 6 of 8 "
+                      f"runs ({cost('predict-concurrency')} against {cost('hpa-concurrency')} replica-seconds", FLAT)
+
+    def test_on_the_120_and_600_s_ramps_it_serves_more_in_seven_runs_and_the_same_in_the_eighth(self):
+        for name in ("ramp-120", "ramp-600"):
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "predict-concurrency", "hpa-concurrency"), (7, 1, 0))
+        self.assertIn("On the 120 s and 600 s ramps it serves more in 7 of 8 runs and the same in the eighth.", FLAT)
+
+    def test_on_the_fastest_ramps_the_hpa_already_asks_past_the_scale_up_limit_so_the_forecast_changes_nothing(self):
+        import math
+        from inference_autoscaling_bench.policies import Predictive
+
+        class Watched(Predictive):
+            def decide(self, obs, bounds):
+                current = obs.ready + obs.pending
+                if 300 <= obs.now <= 420 and current < bounds.max_replicas and obs.ready:
+                    self.seen.append((current, self.recommend(obs), max(current + self.up_pods, math.ceil(current * (1 + self.up_percent / 100)))))
+                return super().decide(obs, bounds)
+
+        for name in ("burst", "ramp-30"):
+            with self.subTest(workload=name):
+                w = workload.load(ROOT / "workloads" / f"{name}.json")
+                trace = workload.generate(w, 1)
+                watched = Watched("concurrency")
+                watched.seen = []
+                ahead = sim.simulate(trace, w, watched)
+                hpa = sim.simulate(trace, w, spec.parse("hpa-concurrency").make())
+                growing = [(rec, cap) for current, rec, cap in watched.seen if rec > current]   # syncs where the HPA asks to grow
+                self.assertGreaterEqual(len(growing), 3)
+                self.assertTrue(all(rec > cap for rec, cap in growing[1:]), growing)
+                during = lambda run: [e for e in run.events if 300 <= e[0] <= 420]
+                self.assertEqual(during(ahead), during(hpa))
+        self.assertEqual(self.tally("burst", "predict-concurrency", "hpa-concurrency")[1], 5)
+        self.assertEqual(self.tally("ramp-30", "predict-concurrency", "hpa-concurrency")[1], 7)
+        self.assertIn("serves the same share as `hpa-concurrency` in 5 of 8 runs of the burst and 7 of 8 of the 30 s ramp", FLAT)
+
+    def test_headroom_wins_on_the_fast_ramps_and_the_forecast_is_cheaper_on_the_slow_ones(self):
+        for name in ("burst", "ramp-30", "ramp-120"):
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "warm-12", "predict-concurrency"), (8, 0, 0))
+        costs, points = [], []
+        for name in ("ramp-300", "ramp-600"):
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "predict-concurrency", "warm-12", "replica_seconds"), (0, 0, 8))
+                costs.append(f"{self.med(name, 'predict-concurrency', 'replica_seconds'):,.0f} against "
+                             f"{self.med(name, 'warm-12', 'replica_seconds'):,.0f}")
+                points.append(f"{(self.med(name, 'warm-12', 'goodput') - self.med(name, 'predict-concurrency', 'goodput')) * 100:.1f}")
+        self.assertIn(f"the forecast costs less in every run ({costs[0]} and {costs[1]} replica-seconds at the median) "
+                      f"and gives up {points[0]} and {points[1]} points of goodput.", FLAT)
+
+    def test_on_the_rate_the_forecast_lifts_every_run_and_never_reaches_requests_in_the_system(self):
+        for name in PredictiveDatasetTests.WORKLOADS:
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "predict-rps", "hpa-rps"), (8, 0, 0))
+                self.assertEqual(self.tally(name, "predict-rps", "hpa-concurrency"), (0, 0, 8))
+        g = lambda name, p: f"{self.med(name, p, 'goodput') * 100:.1f}%"
+        quoted = ", ".join(f"{g(n, 'predict-rps')} against {g(n, 'hpa-rps')} on the {label}"
+                           for n, label in (("burst", "burst"), ("ramp-300", "300 s ramp"), ("ramp-600", "600 s ramp")))
+        self.assertIn(f"in every run of every workload ({quoted}), and stays below `hpa-concurrency` in every run of every workload.", FLAT)
+
+    def test_with_the_cluster_like_model_the_forecast_helps_on_the_slow_ramps_and_stays_below_one_queue(self):
+        names = ("ramp-120", "ramp-300", "ramp-600")
+        for name in names:
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "predict-cluster-like", "cluster-like"), (8, 0, 0))
+        for name in PredictiveDatasetTests.WORKLOADS:
+            with self.subTest(workload=name):
+                self.assertGreaterEqual(self.tally(name, "predict-cluster-like", "hpa-concurrency")[2], 7)
+        g = lambda name, p: f"{self.med(name, p, 'goodput') * 100:.1f}%"
+        ahead = ", ".join(g(n, "predict-cluster-like") for n in names[:2]) + f" and {g(names[2], 'predict-cluster-like')}"
+        behind = ", ".join(g(n, "cluster-like") for n in names[:2]) + f" and {g(names[2], 'cluster-like')}"
+        self.assertIn(f"and 600 s ramps ({ahead} against {behind}), and stays below the one-queue `hpa-concurrency` "
+                      "in at least 7 of 8 runs of every workload.", FLAT)
+
+    def test_the_changelog_quotes_the_same_numbers(self):
+        changelog = " ".join((ROOT / "CHANGELOG.md").read_text().split())
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("## [0.7.0]")]
+        g = lambda p: f"{self.med('ramp-300', p, 'goodput') * 100:.1f}%"
+        self.assertIn(f"serves {g('predict-concurrency')} in time against {g('hpa-concurrency')}", unreleased)
+        self.assertIn("costs less in 6 of 8", unreleased)
+        self.assertEqual(self.tally("burst", "warm-12", "predict-concurrency"), (8, 0, 0))
+        self.assertIn("`warm-12` wins every run", unreleased)

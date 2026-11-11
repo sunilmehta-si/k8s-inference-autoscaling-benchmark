@@ -29,6 +29,32 @@ class CommandTests(unittest.TestCase):
             self.assertIn(f"keda-{signal}", out)
             self.assertIn(f"external-{signal}", out)
 
+    def test_cluster_run_refuses_a_predictive_policy_before_it_touches_a_cluster(self):
+        from unittest import mock
+        with mock.patch("inference_autoscaling_bench.cluster.run_on_cluster") as run:
+            code, _, err = run_cli("cluster-run", "--policy", "ahead=predict-concurrency", "--workload", SMOKE, "--out", "/nonexistent")
+        self.assertIn("modelled only", str(code))
+        run.assert_not_called()
+
+    def test_the_readmes_predictive_quick_start_runs(self):
+        code, out, _ = run_cli("run", str(ROOT / "workloads/ramp-300.json"), "-p", "hpa-concurrency", "-p", "predict-concurrency")
+        self.assertEqual(code, 0)
+        self.assertIn("predict-concurrency: ", out)
+        self.assertIn("iab run workloads/ramp-300.json -p hpa-concurrency -p predict-concurrency", (ROOT / "README.md").read_text())
+
+    def test_the_cluster_docs_say_a_predictive_policy_is_modelled_only(self):
+        docs = " ".join((ROOT / "docs" / "cluster.md").read_text().split())
+        self.assertIn("A `predict-` policy is modelled only", docs)
+        self.assertIn("`iab cluster-run` refuses one before it touches a cluster", docs)
+
+    def test_policies_lists_predict_on_every_signal_and_its_options(self):
+        code, out, _ = run_cli("policies")
+        self.assertEqual(code, 0)
+        for signal in ("concurrency", "queue", "utilization", "rps"):
+            self.assertIn(f"predict-{signal}", out)
+        for key in ("horizon", "alpha", "beta", "floor"):
+            self.assertIn(key, out)
+
     def test_policies_lists_every_signal_with_its_default_target(self):
         code, out, _ = run_cli("policies")
         self.assertEqual(code, 0)

@@ -1,6 +1,7 @@
+import math
 import unittest
 
-from inference_autoscaling_bench.policies import Bounds, Hpa, Observation, Static
+from inference_autoscaling_bench.policies import Bounds, Hpa, Observation, Predictive, Static
 
 BOUNDS = Bounds(min_replicas=2, max_replicas=32)
 
@@ -35,6 +36,25 @@ class RatioTests(unittest.TestCase):
 
     def test_no_ready_pod_means_no_metric_and_no_change(self):
         self.assertIsNone(Hpa("concurrency").decide(obs(ready=0, pending=3, queued=50), BOUNDS))
+
+
+class RecommendTests(unittest.TestCase):
+    """recommend is steps 1 to 3 alone, so another policy can build on the HPA's own recommendation."""
+
+    def test_it_is_the_count_decide_moves_to_before_bounds_windows_and_limits(self):
+        for o in (obs(running=24), obs(running=32, queued=4), obs(ready=10, running=30), obs(ready=4, pending=2, running=60)):
+            with self.subTest(obs=o):
+                self.assertEqual(Hpa("concurrency").recommend(o), Hpa("concurrency").decide(o, BOUNDS))
+
+    def test_it_is_unbounded_and_remembers_nothing(self):
+        hpa = Hpa("concurrency")
+        self.assertEqual(hpa.recommend(obs(running=600)), 100)
+        self.assertEqual(hpa.recommend(obs(ready=10, running=0)), 0)
+        self.assertEqual(len(hpa.history), 0)
+
+    def test_no_metric_is_none(self):
+        self.assertIsNone(Hpa("concurrency").recommend(obs(ready=0, pending=3, queued=50)))
+        self.assertIsNone(Hpa("concurrency", external=True).recommend(obs(ready=0, pending=0)))
 
 
 class StartingPodsTests(unittest.TestCase):
@@ -138,3 +158,138 @@ class ConstructionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def ramp(policy, rates, ready=4, step=15.0):
+    """Feed a predictive policy one sync per rate, with the pods fixed, and return its last decision."""
+    decision = None
+    for i, rate in enumerate(rates, start=1):
+        decision = policy.decide(obs(now=i * step, ready=ready, arrival_rate=rate), BOUNDS)
+    return decision
+
+
+class PredictiveTests(unittest.TestCase):
+    def test_a_steady_rate_is_scaled_for_as_the_hpa_does(self):
+        self.assertEqual(ramp(Predictive("rps"), [5.6] * 10), ramp(Hpa("rps"), [5.6] * 10))
+
+    def test_a_rising_rate_is_scaled_for_one_horizon_ahead(self):
+        # 1 request per second more every 15 s on 10 pods: at 13 per second the HPA sees 0.93 of its target and holds,
+        # while the forecast 45 s ahead is about 16 per second, ceil(16.1 / 1.4) = 12 pods.
+        rates = [2.0 + i for i in range(12)]
+        self.assertEqual(ramp(Hpa("rps"), rates, ready=10), 10)
+        self.assertEqual(ramp(Predictive("rps"), rates, ready=10), 12)
+
+    def test_it_never_asks_for_less_than_the_hpa_would(self):
+        falling = [20.0 - i for i in range(15)]
+        p, h = Predictive("rps"), Hpa("rps")
+        for i, rate in enumerate(falling, start=1):
+            o = obs(now=i * 15.0, ready=12, arrival_rate=rate)
+            self.assertGreaterEqual(p.decide(o, BOUNDS), h.decide(o, BOUNDS))
+
+    def test_it_is_named_after_its_signal(self):
+        self.assertEqual(Predictive("rps").name, "predict-rps")
+        self.assertEqual(Predictive("rps", name="ahead").name, "ahead")
+
+    def test_the_horizon_cannot_be_negative(self):
+        with self.assertRaisesRegex(ValueError, "horizon"):
+            Predictive("rps", horizon_s=-1)
+
+
+class PredictiveSignalTests(unittest.TestCase):
+    """On a signal other than the rate, the metric is scaled by the rate's forecast growth (Little's law)."""
+
+    def primed(self, signal, rates):
+        p = Predictive(signal)
+        for i, rate in enumerate(rates, start=1):
+            p.forecaster.update(i * 15.0, rate)
+        return p
+
+    def test_a_flat_forecast_leaves_the_metric_as_it_is(self):
+        p = self.primed("concurrency", [10.0] * 10)
+        self.assertEqual(p.predict(obs(ready=4, running=36, arrival_rate=10.0)), 6)    # 36 / 6
+        self.assertEqual(p.predict(obs(ready=4, running=36, arrival_rate=10.0)), Hpa("concurrency").recommend(obs(ready=4, running=36)))
+
+    def test_forecast_growth_scales_requests_in_the_system(self):
+        p = self.primed("concurrency", [10.0] * 10)
+        p.forecaster.level, p.forecaster.trend = 10.0, 10.0 / 45   # the rate is forecast to double by the horizon
+        self.assertEqual(p.predict(obs(ready=4, running=24, arrival_rate=10.0)), 8)   # 24 * 2 / 6
+
+    def test_each_signal_scales_its_own_metric(self):
+        for signal, o, expected in (("utilization", obs(ready=4, running=24, arrival_rate=5.0), 10),   # 3 * 2 / 0.6
+                                    ("queue", obs(ready=4, queued=8, arrival_rate=5.0), 16),             # 8 * 2 / 1
+                                    ("rps", obs(ready=4, arrival_rate=5.0), 8)):                          # 10 / 1.4
+            with self.subTest(signal=signal):
+                p = self.primed(signal, [5.0] * 10)
+                p.forecaster.level, p.forecaster.trend = 5.0, 5.0 / 45
+                self.assertEqual(p.predict(o), expected)
+
+    def test_nothing_arriving_means_no_forecast_and_the_hpa_alone_decides(self):
+        p = self.primed("concurrency", [0.0] * 5)
+        self.assertIsNone(p.predict(obs(ready=4, running=8, arrival_rate=0.0)))
+        self.assertEqual(p.decide(obs(now=90.0, ready=4, running=8, arrival_rate=0.0), BOUNDS), 2)
+
+    def test_on_the_rate_signal_it_is_the_forecast_itself(self):
+        p = self.primed("rps", [2.0 + i for i in range(12)])
+        self.assertEqual(p.predict(obs(ready=10, arrival_rate=13.0)), math.ceil(p.forecaster.forecast(45) / 1.4))
+
+
+class FloorTests(unittest.TestCase):
+    def test_without_the_floor_a_forecast_fall_asks_for_fewer_pods_than_the_hpa(self):
+        falling = [20.0 - i for i in range(12)]
+        with_floor, without = Predictive("rps"), Predictive("rps", floor=False, down_window_s=0.0)
+        hpa = Hpa("rps", down_window_s=0.0)
+        for i, rate in enumerate(falling, start=1):
+            o = obs(now=i * 15.0, ready=12, arrival_rate=rate)
+            a, b, c = with_floor.decide(o, BOUNDS), without.decide(o, BOUNDS), hpa.decide(o, BOUNDS)
+        self.assertLess(b, c)
+        self.assertGreaterEqual(a, c)
+
+    def test_without_the_floor_and_without_a_forecast_the_hpa_still_decides(self):
+        p = Predictive("concurrency", floor=False)
+        self.assertEqual(p.decide(obs(now=15.0, ready=4, running=48, arrival_rate=0.0), BOUNDS), 8)
+
+    def test_the_floor_is_on_by_default(self):
+        self.assertTrue(Predictive("rps").floor)
+
+
+class PredictiveControllerTests(unittest.TestCase):
+    """The forecast's recommendation goes through the HPA's own bounds, windows and limit."""
+
+    def rising(self, **kwargs):
+        p = Predictive("rps", **kwargs)
+        for i in range(1, 12):
+            p.forecaster.update(i * 15.0, 2.0 + 4 * i)   # a steep ramp: 4 more requests per second every 15 s
+        return p
+
+    def test_the_scale_up_limit_holds_however_far_ahead_it_looks(self):
+        p = self.rising(horizon_s=600.0)
+        self.assertGreater(p.predict(obs(ready=4, arrival_rate=46.0)), 8)
+        self.assertEqual(p.decide(obs(now=180.0, ready=4, arrival_rate=46.0), BOUNDS), 8)   # +4 or doubling
+
+    def test_the_most_pods_bound_holds(self):
+        p = self.rising(horizon_s=600.0, up_pods=100)
+        self.assertEqual(p.decide(obs(now=180.0, ready=20, arrival_rate=46.0), BOUNDS), 32)
+
+    def test_the_scale_down_window_holds_the_forecasts_peak(self):
+        p = Predictive("rps", floor=False)
+        for i, rate in enumerate([2.0 + 3 * i for i in range(8)] + [0.5] * 6, start=1):
+            last = p.decide(obs(now=i * 15.0, ready=16, arrival_rate=rate), BOUNDS)
+        self.assertEqual(last, 16)   # the high recommendations are inside the 300 s window
+
+    def test_a_policy_remembers_its_own_history(self):
+        p = self.rising()
+        p.decide(obs(now=180.0, ready=10, arrival_rate=46.0), BOUNDS)
+        self.assertEqual(len(p.history), 1)
+        self.assertEqual(len(Predictive("rps").history), 0)
+
+
+class NoReadyPodTests(unittest.TestCase):
+    def test_with_no_ready_pod_it_leaves_the_count_alone_as_the_hpa_does(self):
+        self.assertIsNone(Predictive("concurrency").decide(obs(now=15.0, ready=0, pending=3, queued=50, arrival_rate=9.0), BOUNDS))
+
+    def test_the_forecaster_still_learns_from_a_sync_it_cannot_act_on(self):
+        p = Predictive("rps")
+        p.decide(obs(now=15.0, ready=0, pending=2, arrival_rate=3.0), BOUNDS)
+        p.decide(obs(now=30.0, ready=0, pending=2, arrival_rate=6.0), BOUNDS)
+        self.assertEqual(p.forecaster.at, 30.0)
+        self.assertGreater(p.forecaster.trend, 0)

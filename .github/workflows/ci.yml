@@ -48,5 +48,6 @@ jobs:
           python-version: "3.12"
       - run: pip install -e .
       - run: make results
+      - run: make results-predictive
       - name: The regenerated results match the committed ones
         run: git diff --exit-code -- results

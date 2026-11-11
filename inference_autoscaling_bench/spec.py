@@ -5,9 +5,13 @@
     hpa-queue:target=2,down=60         the HPA on waiting requests per pod, target 2, a 60 s scale-down window
     keda-concurrency                   the HPA KEDA creates, reading the same signal as an external metric
     external-concurrency               the HPA reading the same sum from prometheus-adapter (KEDA's arithmetic)
+    predict-concurrency                the HPA with a forecast of the rate one pod startup ahead beside it
+    ahead=predict-rps:horizon=90       the same on the rate, looking 90 s ahead
     slow=hpa-rps:startup=120           a label, and pods that take 120 s to start
 
-Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA or KEDA; startup
+Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA, KEDA or a
+predictive policy; horizon (s ahead, the pod startup by default), alpha, beta (the forecaster's weights) and floor (hpa,
+the default: never fewer pods than the HPA asks for; none: the forecast alone) for a predictive policy only; startup
 (seconds before a new pod is ready), min (the fewest pods, the standing headroom) and sync (seconds between the
 autoscaler's decisions) for any policy, route (`central`, the default: one shared queue; `pod`: each request is
 sent to a random ready pod when it arrives and waits in that pod's own queue, as behind a Kubernetes Service), lag
@@ -20,11 +24,13 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from .policies import SIGNALS, Hpa, Policy, Static
+from .policies import SIGNALS, Hpa, Policy, Predictive, Static
 from .sim import SYNC_PERIOD_S, Replica
 
 HPA_KEYS = {"target": float, "down": float, "up_window": float, "tolerance": float, "up_pods": int, "up_percent": float}
 HPA_ARGUMENT = {"down": "down_window_s", "up_window": "up_window_s"}
+PREDICT_KEYS = {"horizon": float, "alpha": float, "beta": float}   # predict- only; horizon in seconds
+PREDICT_ARGUMENT = {"horizon": "horizon_s"}
 
 
 @dataclass(frozen=True)
@@ -89,15 +95,30 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
             raise ValueError("a static pool needs at least one pod")
         return Spec(label, text, lambda: Static(size), replica, minimum, sync, pod_queues, lag, scrape)
     external = kind.startswith(("keda-", "external-"))
-    signal = kind.partition("-")[2] if kind.startswith(("hpa-", "keda-", "external-")) else ""
+    predictive = kind.startswith("predict-")
+    signal = kind.partition("-")[2] if kind.startswith(("hpa-", "keda-", "external-", "predict-")) else ""
     if signal not in SIGNALS:
         signals = "|".join(SIGNALS)
-        raise ValueError(f"unknown policy {kind!r}: use static-N, hpa-<{signals}>, keda-<{signals}> or external-<{signals}>")
+        raise ValueError(f"unknown policy {kind!r}: use static-N, hpa-<{signals}>, keda-<{signals}>, external-<{signals}> "
+                         f"or predict-<{signals}>")
+    keys = {**HPA_KEYS, **PREDICT_KEYS} if predictive else HPA_KEYS
     arguments = {}
+    if predictive and "floor" in params:
+        floor = params.pop("floor")
+        if floor not in ("hpa", "none"):
+            raise ValueError(f"floor must be hpa (never fewer pods than the HPA asks for) or none, not {floor!r}")
+        arguments["floor"] = floor == "hpa"
     for key, value in params.items():
-        if key not in HPA_KEYS:
-            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min, sync, route, lag, scrape")
-        arguments[HPA_ARGUMENT.get(key, key)] = _number(HPA_KEYS[key], key, value)
+        if key not in keys:
+            extra = ", floor" if predictive else ""
+            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(keys))}{extra}, startup, min, sync, route, lag, scrape")
+        arguments[PREDICT_ARGUMENT.get(key, HPA_ARGUMENT.get(key, key))] = _number(keys[key], key, value)
+    if predictive:
+        # One pod startup ahead unless the spec says otherwise: pods ordered now are ready when the load arrives.
+        arguments.setdefault("horizon_s", replica.startup_s)
+        Predictive(signal, **arguments)   # refuse a bad horizon, alpha or beta when the spec is read, not mid-run
+        return Spec(label, text, lambda: Predictive(signal, name=label, **arguments), replica, minimum, sync, pod_queues,
+                    lag, scrape)
     return Spec(label, text, lambda: Hpa(signal, name=label, external=external, **arguments), replica, minimum, sync,
                 pod_queues, lag, scrape)
 

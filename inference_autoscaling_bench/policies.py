@@ -18,6 +18,15 @@ starting, and within the tolerance changes nothing; otherwise it asks for ceil(s
 pods still starting count in the average whatever the direction, and no ready pod is needed for a decision. Steps 4 and
 5 are the same.
 
+`Predictive` is the same controller with a forecast beside it: at every sync it feeds the arrival rate to a forecaster
+(`forecast.Holt`) and asks for the pods the rate forecast `horizon_s` seconds ahead needs, by default one pod startup
+ahead, so pods ordered now are ready when the load arrives. On the rate signal the forecast is the metric; on the
+others the metric is scaled by how much the rate is forecast to grow (by Little's law, requests in the system, and
+the busy slots and the queue that hold them, grow with the arrival rate while the time a request spends there holds).
+It moves to the larger of that and the HPA's own recommendation, then through the same bounds, windows and limit.
+With `floor=False` the forecast alone decides whenever there is one, so a forecast fall can ask for fewer pods than the
+HPA would (the scale-down window still holds them for its 300 s).
+
 Request concurrency, queue depth, slot utilization and request rate are the four signals compared. They are
 inputs to the same controller, so a difference between them is a difference in the signal.
 """
@@ -26,6 +35,8 @@ from __future__ import annotations
 import math
 from collections import deque
 from dataclasses import dataclass
+
+from .forecast import Holt
 
 
 @dataclass(frozen=True)
@@ -92,30 +103,35 @@ class Hpa(Policy):
         self.history: deque[tuple[float, int]] = deque()
 
     def decide(self, obs: Observation, bounds: Bounds) -> int | None:
+        desired = self.recommend(obs)
+        if desired is None:
+            return None
+        return self._remember(obs.now, desired, obs.ready + obs.pending, bounds)
+
+    def recommend(self, obs: Observation) -> int | None:
+        """Steps 1 to 3 before the bounds: the replica count this sync's metric asks for (the current count when it
+        changes nothing), or None when there is no metric to act on."""
         current = obs.ready + obs.pending
         if self.external:
             if current == 0:
                 return None
             total = self.metric(obs)
             ratio = total / current / self.target
-            desired = current if abs(ratio - 1) <= self.tolerance else math.ceil(total / self.target)
-            return self._remember(obs.now, desired, current, bounds)
+            return current if abs(ratio - 1) <= self.tolerance else math.ceil(total / self.target)
         if obs.ready == 0:
             return None  # no metric from any pod: the controller leaves the count alone
         total = self.metric(obs)
         ratio = total / obs.ready / self.target
         if abs(ratio - 1) <= self.tolerance:
-            desired = current
-        else:
-            counted = obs.ready
-            if ratio > 1 and obs.pending > 0:
-                counted = obs.ready + obs.pending
-                new_ratio = total / counted / self.target
-                if abs(new_ratio - 1) <= self.tolerance or (new_ratio < 1 < ratio):
-                    return self._remember(obs.now, current, current, bounds)
-                ratio = new_ratio
-            desired = math.ceil(ratio * counted)
-        return self._remember(obs.now, desired, current, bounds)
+            return current
+        counted = obs.ready
+        if ratio > 1 and obs.pending > 0:
+            counted = obs.ready + obs.pending
+            new_ratio = total / counted / self.target
+            if abs(new_ratio - 1) <= self.tolerance or (new_ratio < 1 < ratio):
+                return current
+            ratio = new_ratio
+        return math.ceil(ratio * counted)
 
     def _remember(self, now: float, desired: int, current: int, bounds: Bounds) -> int:
         desired = max(bounds.min_replicas, min(bounds.max_replicas, desired))
@@ -137,3 +153,39 @@ class Hpa(Policy):
         if result > current:
             result = min(result, max(current + self.up_pods, math.ceil(current * (1 + self.up_percent / 100))))
         return max(bounds.min_replicas, min(bounds.max_replicas, result))
+
+
+class Predictive(Hpa):
+    def __init__(self, signal: str, horizon_s: float = 45.0, alpha: float = 0.5, beta: float = 0.3,
+                 floor: bool = True, name: str | None = None, **hpa):
+        if horizon_s < 0:
+            raise ValueError("the horizon cannot be negative")
+        super().__init__(signal, name=name or f"predict-{signal}", **hpa)
+        self.horizon_s = horizon_s
+        self.forecaster = Holt(alpha, beta)
+        self.floor = floor   # never ask for fewer pods than the HPA would
+
+    def decide(self, obs: Observation, bounds: Bounds) -> int | None:
+        self.forecaster.update(obs.now, obs.arrival_rate)
+        reactive = self.recommend(obs)
+        if reactive is None:
+            return None
+        current = obs.ready + obs.pending
+        predicted = self.predict(obs)
+        if predicted is None:
+            desired = reactive
+        else:
+            desired = max(reactive, predicted) if self.floor else predicted
+        return self._remember(obs.now, desired, current, bounds)
+
+    def predict(self, obs: Observation) -> int | None:
+        """The pods the metric forecast `horizon_s` ahead needs at the target (the current count when that is within the
+        tolerance), or None when nothing is arriving, so there is no growth to scale by."""
+        if obs.arrival_rate <= 0:
+            return None
+        growth = self.forecaster.forecast(self.horizon_s) / obs.arrival_rate
+        needed = self.metric(obs) * growth / self.target
+        current = obs.ready + obs.pending
+        if current and abs(needed / current - 1) <= self.tolerance:
+            return current
+        return math.ceil(needed)
