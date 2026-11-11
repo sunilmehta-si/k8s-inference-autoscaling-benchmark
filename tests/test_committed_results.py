@@ -1011,3 +1011,17 @@ class PredictiveClaimTests(unittest.TestCase):
         quoted = ", ".join(f"{g(n, 'predict-rps')} against {g(n, 'hpa-rps')} on the {label}"
                            for n, label in (("burst", "burst"), ("ramp-300", "300 s ramp"), ("ramp-600", "600 s ramp")))
         self.assertIn(f"in every run of every workload ({quoted}), and stays below `hpa-concurrency` in every run of every workload.", FLAT)
+
+    def test_with_the_cluster_like_model_the_forecast_helps_on_the_slow_ramps_and_stays_below_one_queue(self):
+        names = ("ramp-120", "ramp-300", "ramp-600")
+        for name in names:
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "predict-cluster-like", "cluster-like"), (8, 0, 0))
+        for name in PredictiveDatasetTests.WORKLOADS:
+            with self.subTest(workload=name):
+                self.assertGreaterEqual(self.tally(name, "predict-cluster-like", "hpa-concurrency")[2], 7)
+        g = lambda name, p: f"{self.med(name, p, 'goodput') * 100:.1f}%"
+        ahead = ", ".join(g(n, "predict-cluster-like") for n in names[:2]) + f" and {g(names[2], 'predict-cluster-like')}"
+        behind = ", ".join(g(n, "cluster-like") for n in names[:2]) + f" and {g(names[2], 'cluster-like')}"
+        self.assertIn(f"and 600 s ramps ({ahead} against {behind}), and stays below the one-queue `hpa-concurrency` "
+                      "in at least 7 of 8 runs of every workload.", FLAT)

@@ -171,6 +171,10 @@ only: no controller on the cluster forecasts.
 - **On the rate signal the forecast is worth the most, and it is still not enough.** `predict-rps` serves more than
   `hpa-rps` in every run of every workload (71.5% against 54.0% on the burst, 80.4% against 46.8% on the 300 s ramp,
   96.7% against 79.0% on the 600 s ramp), and stays below `hpa-concurrency` in every run of every workload.
+- **With the cluster's queue per pod and sampled pipeline, the forecast helps on the slower ramps too, and does not make
+  up for the queue per pod.** `predict-cluster-like` serves more than `cluster-like` in every run on the 120 s, 300 s
+  and 600 s ramps (86.4%, 93.5% and 94.1% against 84.8%, 90.9% and 91.8%), and stays below the one-queue
+  `hpa-concurrency` in at least 7 of 8 runs of every workload.
 
 ## The cluster stage
 
