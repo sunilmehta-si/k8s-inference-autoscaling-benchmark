@@ -38,6 +38,10 @@ first-token objective:
   of seconds to start can drain it, so faster pods (a cached image and model) are worth more than a cleverer signal.
 - **Standing headroom is the cheapest lever.** Keeping at least 12 pods instead of 2 lifts goodput to 93.5% for about
   3% more replica-seconds, because the autoscaler scales up to the ceiling during the burst either way.
+- **Scaling ahead of the load helps only where the ramp is slow enough.** A policy that scales for the request rate
+  forecast one pod startup ahead serves 98.4% in time on a five-minute ramp, against 94.6% for the HPA, in every run
+  and mostly for less; on the 30 s ramp the HPA already asks for more pods than its scale-up limit allows, so the
+  forecast changes almost nothing, and standing headroom wins ([below](#scaling-ahead-of-the-load)).
 - **A shorter scale-down window saves a lot and costs a lot.** A 30 second window cuts cost by 41% and flaps 16 times,
   and goodput falls from 80.3% to 64.1%.
 

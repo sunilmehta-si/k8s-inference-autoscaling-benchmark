@@ -98,6 +98,11 @@ class ReadmeTests(unittest.TestCase):
             self.assertIn(option, FLAT)
         spec.parse("predict-concurrency:horizon=90,alpha=0.3,beta=0.1,floor=none")
 
+    def test_the_short_answer_quotes_the_predictive_dataset(self):
+        m = lambda p: statistics.median(r["goodput"] for r in results.read(ROOT / "results/predictive/ramp-300")["runs"] if r["policy"] == p) * 100
+        self.assertIn(f"serves {m('predict-concurrency'):.1f}% in time on a five-minute ramp, against {m('hpa-concurrency'):.1f}% for the HPA", FLAT)
+        self.assertIn("## Scaling ahead of the load", README)
+
     def test_the_status_says_the_predictive_policy_is_built_in_the_model_only(self):
         self.assertNotIn("Not yet built: a predictive policy", FLAT)
         self.assertIn("a predictive policy that scales for the request rate one pod startup ahead, in the model, are built", FLAT)
