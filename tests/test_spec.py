@@ -94,6 +94,28 @@ class PredictSpecTests(unittest.TestCase):
         policy = s.make()
         self.assertEqual((policy.target, policy.down_window_s, policy.up_pods, policy.name, s.min_replicas), (2.0, 60.0, 8, "ahead", 6))
 
+    def test_the_horizon_and_the_forecasters_weights_can_be_set(self):
+        policy = spec.parse("predict-rps:horizon=90,alpha=0.3,beta=0.1").make()
+        self.assertEqual((policy.horizon_s, policy.forecaster.alpha, policy.forecaster.beta), (90.0, 0.3, 0.1))
+        self.assertEqual(spec.parse("predict-rps:startup=120,horizon=30").make().horizon_s, 30.0)
+        self.assertEqual(spec.parse("predict-rps:horizon=0").make().horizon_s, 0.0)
+
+    def test_the_defaults_are_the_ones_chosen_before_any_dataset(self):
+        policy = spec.parse("predict-concurrency").make()
+        self.assertEqual((policy.forecaster.alpha, policy.forecaster.beta), (0.5, 0.3))
+
+    def test_a_bad_horizon_alpha_or_beta_is_refused_when_the_spec_is_read(self):
+        for text, reason in (("predict-rps:horizon=-5", "horizon"), ("predict-rps:alpha=0", "alpha"),
+                             ("predict-rps:alpha=2", "alpha"), ("predict-rps:beta=-1", "beta"),
+                             ("predict-rps:horizon=soon", "must be a number")):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, reason):
+                spec.parse(text)
+
+    def test_forecast_options_belong_to_predict_only(self):
+        for text in ("hpa-rps:horizon=60", "keda-rps:alpha=0.5", "static-4:beta=0.2"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                spec.parse(text)
+
     def test_every_make_is_a_fresh_forecaster(self):
         s = spec.parse("predict-rps")
         self.assertIsNot(s.make().forecaster, s.make().forecaster)

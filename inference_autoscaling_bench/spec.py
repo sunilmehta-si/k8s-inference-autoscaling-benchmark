@@ -25,6 +25,8 @@ from .sim import SYNC_PERIOD_S, Replica
 
 HPA_KEYS = {"target": float, "down": float, "up_window": float, "tolerance": float, "up_pods": int, "up_percent": float}
 HPA_ARGUMENT = {"down": "down_window_s", "up_window": "up_window_s"}
+PREDICT_KEYS = {"horizon": float, "alpha": float, "beta": float}   # predict- only; horizon in seconds
+PREDICT_ARGUMENT = {"horizon": "horizon_s"}
 
 
 @dataclass(frozen=True)
@@ -95,15 +97,18 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
         signals = "|".join(SIGNALS)
         raise ValueError(f"unknown policy {kind!r}: use static-N, hpa-<{signals}>, keda-<{signals}>, external-<{signals}> "
                          f"or predict-<{signals}>")
+    keys = {**HPA_KEYS, **PREDICT_KEYS} if predictive else HPA_KEYS
     arguments = {}
     for key, value in params.items():
-        if key not in HPA_KEYS:
-            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min, sync, route, lag, scrape")
-        arguments[HPA_ARGUMENT.get(key, key)] = _number(HPA_KEYS[key], key, value)
+        if key not in keys:
+            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(keys))}, startup, min, sync, route, lag, scrape")
+        arguments[PREDICT_ARGUMENT.get(key, HPA_ARGUMENT.get(key, key))] = _number(keys[key], key, value)
     if predictive:
-        horizon = replica.startup_s   # one pod startup ahead: pods ordered now are ready when the load arrives
-        return Spec(label, text, lambda: Predictive(signal, horizon_s=horizon, name=label, **arguments), replica, minimum,
-                    sync, pod_queues, lag, scrape)
+        # One pod startup ahead unless the spec says otherwise: pods ordered now are ready when the load arrives.
+        arguments.setdefault("horizon_s", replica.startup_s)
+        Predictive(signal, **arguments)   # refuse a bad horizon, alpha or beta when the spec is read, not mid-run
+        return Spec(label, text, lambda: Predictive(signal, name=label, **arguments), replica, minimum, sync, pod_queues,
+                    lag, scrape)
     return Spec(label, text, lambda: Hpa(signal, name=label, external=external, **arguments), replica, minimum, sync,
                 pod_queues, lag, scrape)
 
