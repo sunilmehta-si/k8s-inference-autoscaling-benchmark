@@ -29,6 +29,13 @@ class CommandTests(unittest.TestCase):
             self.assertIn(f"keda-{signal}", out)
             self.assertIn(f"external-{signal}", out)
 
+    def test_cluster_run_refuses_a_predictive_policy_before_it_touches_a_cluster(self):
+        from unittest import mock
+        with mock.patch("inference_autoscaling_bench.cluster.run_on_cluster") as run:
+            code, _, err = run_cli("cluster-run", "--policy", "ahead=predict-concurrency", "--workload", SMOKE, "--out", "/nonexistent")
+        self.assertIn("modelled only", str(code))
+        run.assert_not_called()
+
     def test_policies_lists_predict_on_every_signal_and_its_options(self):
         code, out, _ = run_cli("policies")
         self.assertEqual(code, 0)

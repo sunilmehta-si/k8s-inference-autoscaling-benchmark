@@ -11,7 +11,7 @@ import time
 
 from . import __version__, client as load_client, cluster, compare, experiment, report, results, workload as workloads
 from .metrics import summarize
-from .policies import SIGNALS, Bounds
+from .policies import SIGNALS, Bounds, Predictive
 from .sim import simulate
 from .spec import parse, with_route
 
@@ -89,6 +89,8 @@ def cmd_client(args) -> int:
 
 def cmd_cluster_run(args) -> int:
     spec = _specs([args.policy])[0]
+    if isinstance(spec.make(), Predictive):
+        raise SystemExit("iab: a predictive policy is modelled only; the cluster runs static-N, hpa-, keda- and external- policies")
     w = workloads.load(args.workload)
     document = cluster.run_on_cluster(spec, w, args.seed, Path(args.workload), image=args.image)
     cluster.write(args.out, document)
