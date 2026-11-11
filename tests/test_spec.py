@@ -140,6 +140,15 @@ class PredictSpecTests(unittest.TestCase):
         self.assertNotEqual(rows[0]["replica_seconds"], rows[1]["replica_seconds"])
         self.assertNotEqual(rows[1]["replica_seconds"], rows[2]["replica_seconds"])
 
+    def test_the_modules_examples_parse(self):
+        doc = spec.__doc__.split("Keys:")[0]
+        for line in doc.splitlines()[1:]:
+            text = line.strip().split(" ")[0]
+            if text:
+                with self.subTest(text=text):
+                    spec.parse(text)
+        self.assertIn("predict-concurrency", doc)
+
     def test_every_make_is_a_fresh_forecaster(self):
         s = spec.parse("predict-rps")
         self.assertIsNot(s.make().forecaster, s.make().forecaster)

@@ -5,9 +5,13 @@
     hpa-queue:target=2,down=60         the HPA on waiting requests per pod, target 2, a 60 s scale-down window
     keda-concurrency                   the HPA KEDA creates, reading the same signal as an external metric
     external-concurrency               the HPA reading the same sum from prometheus-adapter (KEDA's arithmetic)
+    predict-concurrency                the HPA with a forecast of the rate one pod startup ahead beside it
+    ahead=predict-rps:horizon=90       the same on the rate, looking 90 s ahead
     slow=hpa-rps:startup=120           a label, and pods that take 120 s to start
 
-Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA or KEDA; startup
+Keys: target, down (scale-down window, s), up_window (s), tolerance, up_pods, up_percent for an HPA, KEDA or a
+predictive policy; horizon (s ahead, the pod startup by default), alpha, beta (the forecaster's weights) and floor (hpa,
+the default: never fewer pods than the HPA asks for; none: the forecast alone) for a predictive policy only; startup
 (seconds before a new pod is ready), min (the fewest pods, the standing headroom) and sync (seconds between the
 autoscaler's decisions) for any policy, route (`central`, the default: one shared queue; `pod`: each request is
 sent to a random ready pod when it arrives and waits in that pod's own queue, as behind a Kubernetes Service), lag
