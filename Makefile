@@ -1,7 +1,7 @@
 # Everyday commands. Python 3.10+; the package has no dependencies (pip install -e . for the iab command).
 PY ?= python3
 
-.PHONY: test results results-pod-queues results-ramps results-keda clean
+.PHONY: test results results-pod-queues results-ramps results-keda results-predictive clean
 
 test:  ## run the unit tests
 	$(PY) -W error::SyntaxWarning -m unittest discover -s tests -t .
@@ -59,6 +59,15 @@ results-keda:  ## the HPA and KEDA on each signal in the model, with a queue per
 	  -p hpa-concurrency=hpa-concurrency:route=pod,scrape=15 -p keda-concurrency=keda-concurrency:route=pod,scrape=15 \
 	  -p hpa-queue=hpa-queue:route=pod,scrape=15 -p keda-queue=keda-queue:route=pod,scrape=15 \
 	  -p hpa-utilization=hpa-utilization:route=pod,scrape=15 -p keda-utilization=keda-utilization:route=pod,scrape=15
+
+results-predictive:  ## the HPA beside a policy that forecasts the rate one pod startup ahead, on the burst and the ramps
+	for w in burst ramp-30 ramp-120 ramp-300 ramp-600; do \
+	  $(PY) -m inference_autoscaling_bench matrix workloads/$$w.json --runs 8 --out results/predictive/$$w \
+	    --title "Does scaling ahead of the load beat reacting to it? ($$w)" \
+	    -p static-24 -p hpa-concurrency -p predict-concurrency -p hpa-rps -p predict-rps -p warm-12=hpa-concurrency:min=12 \
+	    -p cluster-like=hpa-concurrency:route=pod,scrape=15 -p predict-cluster-like=predict-concurrency:route=pod,scrape=15 \
+	    || exit 1; \
+	done
 
 clean:
 	rm -rf build dist *.egg-info

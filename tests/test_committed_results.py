@@ -874,3 +874,47 @@ class KedaSecondDispatchClaimTests(unittest.TestCase):
         second = [k > h for h, k in zip(self.goodput(self.SECOND, "hpa-utilization"), self.goodput(self.SECOND, "keda-utilization"))]
         self.assertEqual((first, second), ([True] * 3, [False] * 3))
         self.assertNotIn("most of that is the path", FLAT)
+
+
+class PredictiveDatasetTests(unittest.TestCase):
+    """results/predictive: the HPA beside the predictive policy on the burst and the four ramps."""
+
+    WORKLOADS = ("burst", "ramp-30", "ramp-120", "ramp-300", "ramp-600")
+    LABELS = ["static-24", "hpa-concurrency", "predict-concurrency", "hpa-rps", "predict-rps", "warm-12", "cluster-like",
+              "predict-cluster-like"]
+
+    def test_every_dataset_is_the_makefiles_and_regenerates_exactly(self):
+        from inference_autoscaling_bench import chart
+        self.assertEqual(sorted(p.parent.name for p in (ROOT / "results" / "predictive").glob("*/runs.json")), sorted(self.WORKLOADS))
+        self.assertIn("for w in " + " ".join(self.WORKLOADS) + ";", (ROOT / "Makefile").read_text())
+        for name in self.WORKLOADS:
+            with self.subTest(workload=name):
+                d = ROOT / "results" / "predictive" / name
+                doc = results.read(d)
+                self.assertEqual([p["label"] for p in doc["policies"]], self.LABELS)
+                self.assertEqual(sorted((r["policy"], r["seed"]) for r in doc["runs"]),
+                                 sorted((label, seed) for label in self.LABELS for seed in range(1, 9)))
+                self.assertEqual((d / "README.md").read_text(), report.markdown(doc))
+                self.assertEqual((d / "chart.svg").read_text(), chart.svg(doc))
+
+    def test_the_policies_are_the_ones_the_methodology_fixed_before_the_runs(self):
+        doc = results.read(ROOT / "results" / "predictive" / "burst")
+        texts = {p["label"]: p["text"] for p in doc["policies"]}
+        self.assertEqual(texts["predict-concurrency"], "predict-concurrency")
+        self.assertEqual(texts["warm-12"], "warm-12=hpa-concurrency:min=12")
+        self.assertEqual(texts["predict-cluster-like"], "predict-cluster-like=predict-concurrency:route=pod,scrape=15")
+        methodology = " ".join((ROOT / "docs" / "methodology.md").read_text().split())
+        for label in self.LABELS:
+            self.assertIn(f"`{label}`", methodology)
+
+    def test_the_first_run_of_every_policy_is_reproduced_from_its_spec(self):
+        from inference_autoscaling_bench.experiment import run_matrix
+        for name in self.WORKLOADS:
+            doc = results.read(ROOT / "results" / "predictive" / name)
+            w = workload.load(ROOT / "workloads" / f"{name}.json")
+            for policy in doc["policies"]:
+                with self.subTest(workload=name, policy=policy["label"]):
+                    rows, _ = run_matrix(w, [spec.parse(policy["text"])], [1], Bounds(policy["min_replicas"], doc["bounds"]["max_replicas"]))
+                    saved = next(r for r in doc["runs"] if r["policy"] == policy["label"] and r["seed"] == 1)
+                    for key in ("goodput", "ttft_p95_ms", "replica_seconds"):
+                        self.assertAlmostEqual(saved[key], rows[0][key], delta=abs(rows[0][key]) * 1e-9 + 1e-9, msg=key)
