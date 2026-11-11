@@ -37,6 +37,25 @@ class RatioTests(unittest.TestCase):
         self.assertIsNone(Hpa("concurrency").decide(obs(ready=0, pending=3, queued=50), BOUNDS))
 
 
+class RecommendTests(unittest.TestCase):
+    """recommend is steps 1 to 3 alone, so another policy can build on the HPA's own recommendation."""
+
+    def test_it_is_the_count_decide_moves_to_before_bounds_windows_and_limits(self):
+        for o in (obs(running=24), obs(running=32, queued=4), obs(ready=10, running=30), obs(ready=4, pending=2, running=60)):
+            with self.subTest(obs=o):
+                self.assertEqual(Hpa("concurrency").recommend(o), Hpa("concurrency").decide(o, BOUNDS))
+
+    def test_it_is_unbounded_and_remembers_nothing(self):
+        hpa = Hpa("concurrency")
+        self.assertEqual(hpa.recommend(obs(running=600)), 100)
+        self.assertEqual(hpa.recommend(obs(ready=10, running=0)), 0)
+        self.assertEqual(len(hpa.history), 0)
+
+    def test_no_metric_is_none(self):
+        self.assertIsNone(Hpa("concurrency").recommend(obs(ready=0, pending=3, queued=50)))
+        self.assertIsNone(Hpa("concurrency", external=True).recommend(obs(ready=0, pending=0)))
+
+
 class StartingPodsTests(unittest.TestCase):
     def test_pods_still_starting_count_as_using_nothing_so_the_surge_is_not_ordered_twice(self):
         # 4 ready pods carry 48 requests (ratio 2) and 4 more are starting: with those counted the ratio is exactly 1.

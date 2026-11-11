@@ -92,30 +92,35 @@ class Hpa(Policy):
         self.history: deque[tuple[float, int]] = deque()
 
     def decide(self, obs: Observation, bounds: Bounds) -> int | None:
+        desired = self.recommend(obs)
+        if desired is None:
+            return None
+        return self._remember(obs.now, desired, obs.ready + obs.pending, bounds)
+
+    def recommend(self, obs: Observation) -> int | None:
+        """Steps 1 to 3 before the bounds: the replica count this sync's metric asks for (the current count when it
+        changes nothing), or None when there is no metric to act on."""
         current = obs.ready + obs.pending
         if self.external:
             if current == 0:
                 return None
             total = self.metric(obs)
             ratio = total / current / self.target
-            desired = current if abs(ratio - 1) <= self.tolerance else math.ceil(total / self.target)
-            return self._remember(obs.now, desired, current, bounds)
+            return current if abs(ratio - 1) <= self.tolerance else math.ceil(total / self.target)
         if obs.ready == 0:
             return None  # no metric from any pod: the controller leaves the count alone
         total = self.metric(obs)
         ratio = total / obs.ready / self.target
         if abs(ratio - 1) <= self.tolerance:
-            desired = current
-        else:
-            counted = obs.ready
-            if ratio > 1 and obs.pending > 0:
-                counted = obs.ready + obs.pending
-                new_ratio = total / counted / self.target
-                if abs(new_ratio - 1) <= self.tolerance or (new_ratio < 1 < ratio):
-                    return self._remember(obs.now, current, current, bounds)
-                ratio = new_ratio
-            desired = math.ceil(ratio * counted)
-        return self._remember(obs.now, desired, current, bounds)
+            return current
+        counted = obs.ready
+        if ratio > 1 and obs.pending > 0:
+            counted = obs.ready + obs.pending
+            new_ratio = total / counted / self.target
+            if abs(new_ratio - 1) <= self.tolerance or (new_ratio < 1 < ratio):
+                return current
+            ratio = new_ratio
+        return math.ceil(ratio * counted)
 
     def _remember(self, now: float, desired: int, current: int, bounds: Bounds) -> int:
         desired = max(bounds.min_replicas, min(bounds.max_replicas, desired))
