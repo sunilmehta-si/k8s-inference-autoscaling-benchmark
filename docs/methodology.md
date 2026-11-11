@@ -94,10 +94,12 @@ runs, and win counts are given where it did not.
   interval and usually more, which makes every policy in the seven datasets look better than it would be; on the
   cluster, `lag=30` with a queue per pod brings the HPA policies' goodput within 3.2 points of the real thing, and
   `scrape=15` places the ramps' utilization flip where the cluster does (the README's cluster stage).
-- **There is no Knative or predictive scaling.** They are different controllers around the same signals. KEDA is
-  modelled as the HPA it creates, reading the sum over the pods as an external metric (`keda-SIGNAL`), and run on the
-  cluster beside the HPA; KEDA's own polling and activation are not modelled, since with at least two pods it never
-  scales from zero.
+- **There is no Knative, and the predictive policy is one simple forecaster in the model.** Knative is a different
+  controller around the same signals. KEDA is modelled as the HPA it creates, reading the sum over the pods as an
+  external metric (`keda-SIGNAL`), and run on the cluster beside the HPA; KEDA's own polling and activation are not
+  modelled, since with at least two pods it never scales from zero. `predict-SIGNAL` forecasts with Holt's linear trend
+  method at its pre-chosen weights; a seasonal or learned forecaster, or a schedule known in advance, could do better
+  on traffic that repeats, and none of it runs on the cluster.
 - **One workload.** A different trace changes the numbers, and a gentler ramp changes the conclusions.
 
 The cluster stage ([docs/cluster.md](cluster.md)) runs the same policies with the real Kubernetes controller, Prometheus

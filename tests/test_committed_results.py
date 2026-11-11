@@ -103,6 +103,11 @@ class ReadmeTests(unittest.TestCase):
         self.assertIn(f"serves {m('predict-concurrency'):.1f}% in time on a five-minute ramp, against {m('hpa-concurrency'):.1f}% for the HPA", FLAT)
         self.assertIn("## Scaling ahead of the load", README)
 
+    def test_the_methodology_no_longer_says_there_is_no_predictive_scaling(self):
+        methodology = " ".join((ROOT / "docs" / "methodology.md").read_text().split())
+        self.assertNotIn("There is no Knative or predictive scaling", methodology)
+        self.assertIn("the predictive policy is one simple forecaster in the model", methodology)
+
     def test_the_status_says_the_predictive_policy_is_built_in_the_model_only(self):
         self.assertNotIn("Not yet built: a predictive policy", FLAT)
         self.assertIn("a predictive policy that scales for the request rate one pod startup ahead, in the model, are built", FLAT)
