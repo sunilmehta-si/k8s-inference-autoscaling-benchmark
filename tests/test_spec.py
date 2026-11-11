@@ -125,6 +125,21 @@ class PredictSpecTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown option"):
             spec.parse("hpa-rps:floor=none")
 
+    def test_route_lag_and_scrape_reach_a_predictive_run(self):
+        s = spec.parse("predict-concurrency:route=pod,scrape=15")
+        self.assertEqual((s.pod_queues, s.scrape_s), (True, 15.0))
+        self.assertEqual(spec.parse("predict-concurrency:lag=30").metrics_lag_s, 30.0)
+        with self.assertRaisesRegex(ValueError, "not both"):
+            spec.parse("predict-concurrency:lag=30,scrape=15")
+
+    def test_the_matrix_runs_a_predictive_spec_beside_the_hpa_on_the_same_trace(self):
+        w = workload.load(Path(__file__).resolve().parent.parent / "workloads/ramp-120.json")
+        rows, _ = experiment.run_matrix(w, [spec.parse("hpa-concurrency"), spec.parse("predict-concurrency"),
+                                            spec.parse("lagged=predict-concurrency:lag=30")], [1])
+        self.assertEqual(len({r["requests"] for r in rows}), 1)
+        self.assertNotEqual(rows[0]["replica_seconds"], rows[1]["replica_seconds"])
+        self.assertNotEqual(rows[1]["replica_seconds"], rows[2]["replica_seconds"])
+
     def test_every_make_is_a_fresh_forecaster(self):
         s = spec.parse("predict-rps")
         self.assertIsNot(s.make().forecaster, s.make().forecaster)
