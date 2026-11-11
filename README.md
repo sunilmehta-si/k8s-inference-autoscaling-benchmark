@@ -164,6 +164,10 @@ only: no controller on the cluster forecasts.
   recommendation is above the scale-up limit (+4 pods or doubling) in the first run, so the forecast's larger ask is cut
   to the same count and the two make the same decisions through the ramp. `predict-concurrency` serves the same share as
   `hpa-concurrency` in 5 of 8 runs of the burst and 7 of 8 of the 30 s ramp.
+- **Standing headroom still wins where the ramp is fast; the forecast is the cheaper lever where it is slow.** `warm-12`
+  serves more than `predict-concurrency` in every run on the burst and the 30 s and 120 s ramps. On the 300 s and 600 s
+  ramps the forecast costs less in every run (15,698 against 17,685 and 18,428 against 21,660 replica-seconds at the
+  median) and gives up 1.6 and 0.5 points of goodput.
 
 ## The cluster stage
 

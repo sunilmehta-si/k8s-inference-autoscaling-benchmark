@@ -987,3 +987,17 @@ class PredictiveClaimTests(unittest.TestCase):
         self.assertEqual(self.tally("burst", "predict-concurrency", "hpa-concurrency")[1], 5)
         self.assertEqual(self.tally("ramp-30", "predict-concurrency", "hpa-concurrency")[1], 7)
         self.assertIn("serves the same share as `hpa-concurrency` in 5 of 8 runs of the burst and 7 of 8 of the 30 s ramp", FLAT)
+
+    def test_headroom_wins_on_the_fast_ramps_and_the_forecast_is_cheaper_on_the_slow_ones(self):
+        for name in ("burst", "ramp-30", "ramp-120"):
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "warm-12", "predict-concurrency"), (8, 0, 0))
+        costs, points = [], []
+        for name in ("ramp-300", "ramp-600"):
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "predict-concurrency", "warm-12", "replica_seconds"), (0, 0, 8))
+                costs.append(f"{self.med(name, 'predict-concurrency', 'replica_seconds'):,.0f} against "
+                             f"{self.med(name, 'warm-12', 'replica_seconds'):,.0f}")
+                points.append(f"{(self.med(name, 'warm-12', 'goodput') - self.med(name, 'predict-concurrency', 'goodput')) * 100:.1f}")
+        self.assertIn(f"the forecast costs less in every run ({costs[0]} and {costs[1]} replica-seconds at the median) "
+                      f"and gives up {points[0]} and {points[1]} points of goodput.", FLAT)
