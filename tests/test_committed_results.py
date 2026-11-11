@@ -1058,9 +1058,9 @@ class PredictiveClaimTests(unittest.TestCase):
 
     def test_the_changelog_quotes_the_same_numbers(self):
         changelog = " ".join((ROOT / "CHANGELOG.md").read_text().split())
-        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("## [0.7.0]")]
+        release = changelog[changelog.index("## [0.8.0]"):changelog.index("## [0.7.0]")]
         g = lambda p: f"{self.med('ramp-300', p, 'goodput') * 100:.1f}%"
-        self.assertIn(f"serves {g('predict-concurrency')} in time against {g('hpa-concurrency')}", unreleased)
-        self.assertIn("costs less in 6 of 8", unreleased)
+        self.assertIn(f"serves {g('predict-concurrency')} in time against {g('hpa-concurrency')}", release)
+        self.assertIn("costs less in 6 of 8", release)
         self.assertEqual(self.tally("burst", "warm-12", "predict-concurrency"), (8, 0, 0))
-        self.assertIn("`warm-12` wins every run", unreleased)
+        self.assertIn("`warm-12` wins every run", release)

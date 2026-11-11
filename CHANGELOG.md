@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-11
+
+A predictive policy, and where scaling ahead of the load helps. `predict-SIGNAL` is the HPA with a forecast of the
+arrival rate one pod startup ahead beside it, never asking for fewer pods than the HPA. In the model it serves more
+requests in time than the HPA in every run of the 300 s ramp, and changes almost nothing on the burst and the 30 s ramp,
+where the HPA already asks past its scale-up limit and a warm pool of 12 pods wins every run. It runs in the model only.
+
 ### Added
 - `predict-SIGNAL`, a policy that scales ahead of the load: the HPA on that signal with a forecast beside it
   (`forecast.Holt`, Holt's linear trend method on the arrival rate the autoscaler is shown), asking for the pods the
