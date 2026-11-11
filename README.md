@@ -168,6 +168,9 @@ only: no controller on the cluster forecasts.
   serves more than `predict-concurrency` in every run on the burst and the 30 s and 120 s ramps. On the 300 s and 600 s
   ramps the forecast costs less in every run (15,698 against 17,685 and 18,428 against 21,660 replica-seconds at the
   median) and gives up 1.6 and 0.5 points of goodput.
+- **On the rate signal the forecast is worth the most, and it is still not enough.** `predict-rps` serves more than
+  `hpa-rps` in every run of every workload (71.5% against 54.0% on the burst, 80.4% against 46.8% on the 300 s ramp,
+  96.7% against 79.0% on the 600 s ramp), and stays below `hpa-concurrency` in every run of every workload.
 
 ## The cluster stage
 

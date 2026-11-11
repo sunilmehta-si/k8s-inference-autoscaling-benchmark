@@ -1001,3 +1001,13 @@ class PredictiveClaimTests(unittest.TestCase):
                 points.append(f"{(self.med(name, 'warm-12', 'goodput') - self.med(name, 'predict-concurrency', 'goodput')) * 100:.1f}")
         self.assertIn(f"the forecast costs less in every run ({costs[0]} and {costs[1]} replica-seconds at the median) "
                       f"and gives up {points[0]} and {points[1]} points of goodput.", FLAT)
+
+    def test_on_the_rate_the_forecast_lifts_every_run_and_never_reaches_requests_in_the_system(self):
+        for name in PredictiveDatasetTests.WORKLOADS:
+            with self.subTest(workload=name):
+                self.assertEqual(self.tally(name, "predict-rps", "hpa-rps"), (8, 0, 0))
+                self.assertEqual(self.tally(name, "predict-rps", "hpa-concurrency"), (0, 0, 8))
+        g = lambda name, p: f"{self.med(name, p, 'goodput') * 100:.1f}%"
+        quoted = ", ".join(f"{g(n, 'predict-rps')} against {g(n, 'hpa-rps')} on the {label}"
+                           for n, label in (("burst", "burst"), ("ramp-300", "300 s ramp"), ("ramp-600", "600 s ramp")))
+        self.assertIn(f"in every run of every workload ({quoted}), and stays below `hpa-concurrency` in every run of every workload.", FLAT)
