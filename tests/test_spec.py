@@ -116,6 +116,15 @@ class PredictSpecTests(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 spec.parse(text)
 
+    def test_the_floor_is_the_hpa_unless_the_spec_lifts_it(self):
+        self.assertTrue(spec.parse("predict-rps").make().floor)
+        self.assertTrue(spec.parse("predict-rps:floor=hpa").make().floor)
+        self.assertFalse(spec.parse("predict-rps:floor=none").make().floor)
+        with self.assertRaisesRegex(ValueError, "floor must be"):
+            spec.parse("predict-rps:floor=static")
+        with self.assertRaisesRegex(ValueError, "unknown option"):
+            spec.parse("hpa-rps:floor=none")
+
     def test_every_make_is_a_fresh_forecaster(self):
         s = spec.parse("predict-rps")
         self.assertIsNot(s.make().forecaster, s.make().forecaster)

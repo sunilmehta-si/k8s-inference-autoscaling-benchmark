@@ -99,9 +99,15 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
                          f"or predict-<{signals}>")
     keys = {**HPA_KEYS, **PREDICT_KEYS} if predictive else HPA_KEYS
     arguments = {}
+    if predictive and "floor" in params:
+        floor = params.pop("floor")
+        if floor not in ("hpa", "none"):
+            raise ValueError(f"floor must be hpa (never fewer pods than the HPA asks for) or none, not {floor!r}")
+        arguments["floor"] = floor == "hpa"
     for key, value in params.items():
         if key not in keys:
-            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(keys))}, startup, min, sync, route, lag, scrape")
+            extra = ", floor" if predictive else ""
+            raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(keys))}{extra}, startup, min, sync, route, lag, scrape")
         arguments[PREDICT_ARGUMENT.get(key, HPA_ARGUMENT.get(key, key))] = _number(keys[key], key, value)
     if predictive:
         # One pod startup ahead unless the spec says otherwise: pods ordered now are ready when the load arrives.
