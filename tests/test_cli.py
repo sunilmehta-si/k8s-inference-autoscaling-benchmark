@@ -29,6 +29,14 @@ class CommandTests(unittest.TestCase):
             self.assertIn(f"keda-{signal}", out)
             self.assertIn(f"external-{signal}", out)
 
+    def test_policies_lists_predict_on_every_signal_and_its_options(self):
+        code, out, _ = run_cli("policies")
+        self.assertEqual(code, 0)
+        for signal in ("concurrency", "queue", "utilization", "rps"):
+            self.assertIn(f"predict-{signal}", out)
+        for key in ("horizon", "alpha", "beta", "floor"):
+            self.assertIn(key, out)
+
     def test_policies_lists_every_signal_with_its_default_target(self):
         code, out, _ = run_cli("policies")
         self.assertEqual(code, 0)
