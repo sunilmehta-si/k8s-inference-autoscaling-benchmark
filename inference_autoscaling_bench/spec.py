@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Callable
 
-from .policies import SIGNALS, Hpa, Policy, Static
+from .policies import SIGNALS, Hpa, Policy, Predictive, Static
 from .sim import SYNC_PERIOD_S, Replica
 
 HPA_KEYS = {"target": float, "down": float, "up_window": float, "tolerance": float, "up_pods": int, "up_percent": float}
@@ -89,15 +89,21 @@ def parse(text: str, base: Replica = Replica()) -> Spec:
             raise ValueError("a static pool needs at least one pod")
         return Spec(label, text, lambda: Static(size), replica, minimum, sync, pod_queues, lag, scrape)
     external = kind.startswith(("keda-", "external-"))
-    signal = kind.partition("-")[2] if kind.startswith(("hpa-", "keda-", "external-")) else ""
+    predictive = kind.startswith("predict-")
+    signal = kind.partition("-")[2] if kind.startswith(("hpa-", "keda-", "external-", "predict-")) else ""
     if signal not in SIGNALS:
         signals = "|".join(SIGNALS)
-        raise ValueError(f"unknown policy {kind!r}: use static-N, hpa-<{signals}>, keda-<{signals}> or external-<{signals}>")
+        raise ValueError(f"unknown policy {kind!r}: use static-N, hpa-<{signals}>, keda-<{signals}>, external-<{signals}> "
+                         f"or predict-<{signals}>")
     arguments = {}
     for key, value in params.items():
         if key not in HPA_KEYS:
             raise ValueError(f"unknown option {key!r}; choose from {', '.join(sorted(HPA_KEYS))}, startup, min, sync, route, lag, scrape")
         arguments[HPA_ARGUMENT.get(key, key)] = _number(HPA_KEYS[key], key, value)
+    if predictive:
+        horizon = replica.startup_s   # one pod startup ahead: pods ordered now are ready when the load arrives
+        return Spec(label, text, lambda: Predictive(signal, horizon_s=horizon, name=label, **arguments), replica, minimum,
+                    sync, pod_queues, lag, scrape)
     return Spec(label, text, lambda: Hpa(signal, name=label, external=external, **arguments), replica, minimum, sync,
                 pod_queues, lag, scrape)
 
