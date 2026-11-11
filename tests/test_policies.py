@@ -250,3 +250,34 @@ class FloorTests(unittest.TestCase):
 
     def test_the_floor_is_on_by_default(self):
         self.assertTrue(Predictive("rps").floor)
+
+
+class PredictiveControllerTests(unittest.TestCase):
+    """The forecast's recommendation goes through the HPA's own bounds, windows and limit."""
+
+    def rising(self, **kwargs):
+        p = Predictive("rps", **kwargs)
+        for i in range(1, 12):
+            p.forecaster.update(i * 15.0, 2.0 + 4 * i)   # a steep ramp: 4 more requests per second every 15 s
+        return p
+
+    def test_the_scale_up_limit_holds_however_far_ahead_it_looks(self):
+        p = self.rising(horizon_s=600.0)
+        self.assertGreater(p.predict(obs(ready=4, arrival_rate=46.0)), 8)
+        self.assertEqual(p.decide(obs(now=180.0, ready=4, arrival_rate=46.0), BOUNDS), 8)   # +4 or doubling
+
+    def test_the_most_pods_bound_holds(self):
+        p = self.rising(horizon_s=600.0, up_pods=100)
+        self.assertEqual(p.decide(obs(now=180.0, ready=20, arrival_rate=46.0), BOUNDS), 32)
+
+    def test_the_scale_down_window_holds_the_forecasts_peak(self):
+        p = Predictive("rps", floor=False)
+        for i, rate in enumerate([2.0 + 3 * i for i in range(8)] + [0.5] * 6, start=1):
+            last = p.decide(obs(now=i * 15.0, ready=16, arrival_rate=rate), BOUNDS)
+        self.assertEqual(last, 16)   # the high recommendations are inside the 300 s window
+
+    def test_a_policy_remembers_its_own_history(self):
+        p = self.rising()
+        p.decide(obs(now=180.0, ready=10, arrival_rate=46.0), BOUNDS)
+        self.assertEqual(len(p.history), 1)
+        self.assertEqual(len(Predictive("rps").history), 0)
