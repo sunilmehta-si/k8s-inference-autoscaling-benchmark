@@ -1,3 +1,4 @@
+import math
 import unittest
 
 from inference_autoscaling_bench.policies import Bounds, Hpa, Observation, Predictive, Static
@@ -189,8 +190,44 @@ class PredictiveTests(unittest.TestCase):
         self.assertEqual(Predictive("rps").name, "predict-rps")
         self.assertEqual(Predictive("rps", name="ahead").name, "ahead")
 
-    def test_only_the_rate_can_be_forecast_so_far_and_the_horizon_cannot_be_negative(self):
-        with self.assertRaisesRegex(ValueError, "rps"):
-            Predictive("concurrency")
+    def test_the_horizon_cannot_be_negative(self):
         with self.assertRaisesRegex(ValueError, "horizon"):
             Predictive("rps", horizon_s=-1)
+
+
+class PredictiveSignalTests(unittest.TestCase):
+    """On a signal other than the rate, the metric is scaled by the rate's forecast growth (Little's law)."""
+
+    def primed(self, signal, rates):
+        p = Predictive(signal)
+        for i, rate in enumerate(rates, start=1):
+            p.forecaster.update(i * 15.0, rate)
+        return p
+
+    def test_a_flat_forecast_leaves_the_metric_as_it_is(self):
+        p = self.primed("concurrency", [10.0] * 10)
+        self.assertEqual(p.predict(obs(ready=4, running=36, arrival_rate=10.0)), 6)    # 36 / 6
+        self.assertEqual(p.predict(obs(ready=4, running=36, arrival_rate=10.0)), Hpa("concurrency").recommend(obs(ready=4, running=36)))
+
+    def test_forecast_growth_scales_requests_in_the_system(self):
+        p = self.primed("concurrency", [10.0] * 10)
+        p.forecaster.level, p.forecaster.trend = 10.0, 10.0 / 45   # the rate is forecast to double by the horizon
+        self.assertEqual(p.predict(obs(ready=4, running=24, arrival_rate=10.0)), 8)   # 24 * 2 / 6
+
+    def test_each_signal_scales_its_own_metric(self):
+        for signal, o, expected in (("utilization", obs(ready=4, running=24, arrival_rate=5.0), 10),   # 3 * 2 / 0.6
+                                    ("queue", obs(ready=4, queued=8, arrival_rate=5.0), 16),             # 8 * 2 / 1
+                                    ("rps", obs(ready=4, arrival_rate=5.0), 8)):                          # 10 / 1.4
+            with self.subTest(signal=signal):
+                p = self.primed(signal, [5.0] * 10)
+                p.forecaster.level, p.forecaster.trend = 5.0, 5.0 / 45
+                self.assertEqual(p.predict(o), expected)
+
+    def test_nothing_arriving_means_no_forecast_and_the_hpa_alone_decides(self):
+        p = self.primed("concurrency", [0.0] * 5)
+        self.assertIsNone(p.predict(obs(ready=4, running=8, arrival_rate=0.0)))
+        self.assertEqual(p.decide(obs(now=90.0, ready=4, running=8, arrival_rate=0.0), BOUNDS), 2)
+
+    def test_on_the_rate_signal_it_is_the_forecast_itself(self):
+        p = self.primed("rps", [2.0 + i for i in range(12)])
+        self.assertEqual(p.predict(obs(ready=10, arrival_rate=13.0)), math.ceil(p.forecaster.forecast(45) / 1.4))
