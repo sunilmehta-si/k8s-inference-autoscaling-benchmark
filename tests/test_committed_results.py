@@ -897,6 +897,12 @@ class PredictiveDatasetTests(unittest.TestCase):
                 self.assertEqual((d / "README.md").read_text(), report.markdown(doc))
                 self.assertEqual((d / "chart.svg").read_text(), chart.svg(doc))
 
+    def test_ci_regenerates_the_dataset_and_fails_on_any_difference(self):
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        reproduce = ci[ci.index("  reproduce:"):]
+        self.assertIn("make results-predictive", reproduce)
+        self.assertLess(reproduce.index("make results-predictive"), reproduce.index("git diff --exit-code -- results"))
+
     def test_the_policies_are_the_ones_the_methodology_fixed_before_the_runs(self):
         doc = results.read(ROOT / "results" / "predictive" / "burst")
         texts = {p["label"]: p["text"] for p in doc["policies"]}
