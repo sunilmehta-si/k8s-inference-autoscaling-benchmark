@@ -959,3 +959,31 @@ class PredictiveClaimTests(unittest.TestCase):
             with self.subTest(workload=name):
                 self.assertEqual(self.tally(name, "predict-concurrency", "hpa-concurrency"), (7, 1, 0))
         self.assertIn("On the 120 s and 600 s ramps it serves more in 7 of 8 runs and the same in the eighth.", FLAT)
+
+    def test_on_the_fastest_ramps_the_hpa_already_asks_past_the_scale_up_limit_so_the_forecast_changes_nothing(self):
+        import math
+        from inference_autoscaling_bench.policies import Predictive
+
+        class Watched(Predictive):
+            def decide(self, obs, bounds):
+                current = obs.ready + obs.pending
+                if 300 <= obs.now <= 420 and current < bounds.max_replicas and obs.ready:
+                    self.seen.append((current, self.recommend(obs), max(current + self.up_pods, math.ceil(current * (1 + self.up_percent / 100)))))
+                return super().decide(obs, bounds)
+
+        for name in ("burst", "ramp-30"):
+            with self.subTest(workload=name):
+                w = workload.load(ROOT / "workloads" / f"{name}.json")
+                trace = workload.generate(w, 1)
+                watched = Watched("concurrency")
+                watched.seen = []
+                ahead = sim.simulate(trace, w, watched)
+                hpa = sim.simulate(trace, w, spec.parse("hpa-concurrency").make())
+                growing = [(rec, cap) for current, rec, cap in watched.seen if rec > current]   # syncs where the HPA asks to grow
+                self.assertGreaterEqual(len(growing), 3)
+                self.assertTrue(all(rec > cap for rec, cap in growing[1:]), growing)
+                during = lambda run: [e for e in run.events if 300 <= e[0] <= 420]
+                self.assertEqual(during(ahead), during(hpa))
+        self.assertEqual(self.tally("burst", "predict-concurrency", "hpa-concurrency")[1], 5)
+        self.assertEqual(self.tally("ramp-30", "predict-concurrency", "hpa-concurrency")[1], 7)
+        self.assertIn("serves the same share as `hpa-concurrency` in 5 of 8 runs of the burst and 7 of 8 of the 30 s ramp", FLAT)

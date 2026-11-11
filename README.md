@@ -159,6 +159,11 @@ only: no controller on the cluster forecasts.
   tail (976 ms against 2,286 ms at the 95th percentile), in every run, and costs less in 6 of 8 runs (15,698 against
   16,536 replica-seconds at the median). On the 120 s and 600 s ramps it serves more in 7 of 8 runs and the same in
   the eighth.
+- **On the fastest ramps it changes almost nothing, because the HPA already asks for more than it may add.** On the
+  burst and the 30 s ramp, from the ramp's second sync until the pool reaches its 32-pod ceiling, the HPA's own
+  recommendation is above the scale-up limit (+4 pods or doubling) in the first run, so the forecast's larger ask is cut
+  to the same count and the two make the same decisions through the ramp. `predict-concurrency` serves the same share as
+  `hpa-concurrency` in 5 of 8 runs of the burst and 7 of 8 of the 30 s ramp.
 
 ## The cluster stage
 
