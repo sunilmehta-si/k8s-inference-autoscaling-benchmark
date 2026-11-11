@@ -24,6 +24,8 @@ ahead, so pods ordered now are ready when the load arrives. On the rate signal t
 others the metric is scaled by how much the rate is forecast to grow (by Little's law, requests in the system, and
 the busy slots and the queue that hold them, grow with the arrival rate while the time a request spends there holds).
 It moves to the larger of that and the HPA's own recommendation, then through the same bounds, windows and limit.
+With `floor=False` the forecast alone decides whenever there is one, so a forecast fall can ask for fewer pods than the
+HPA would (the scale-down window still holds them for its 300 s).
 
 Request concurrency, queue depth, slot utilization and request rate are the four signals compared. They are
 inputs to the same controller, so a difference between them is a difference in the signal.
@@ -155,12 +157,13 @@ class Hpa(Policy):
 
 class Predictive(Hpa):
     def __init__(self, signal: str, horizon_s: float = 45.0, alpha: float = 0.5, beta: float = 0.3,
-                 name: str | None = None, **hpa):
+                 floor: bool = True, name: str | None = None, **hpa):
         if horizon_s < 0:
             raise ValueError("the horizon cannot be negative")
         super().__init__(signal, name=name or f"predict-{signal}", **hpa)
         self.horizon_s = horizon_s
         self.forecaster = Holt(alpha, beta)
+        self.floor = floor   # never ask for fewer pods than the HPA would
 
     def decide(self, obs: Observation, bounds: Bounds) -> int | None:
         self.forecaster.update(obs.now, obs.arrival_rate)
@@ -169,7 +172,10 @@ class Predictive(Hpa):
             return None
         current = obs.ready + obs.pending
         predicted = self.predict(obs)
-        desired = reactive if predicted is None else max(reactive, predicted)
+        if predicted is None:
+            desired = reactive
+        else:
+            desired = max(reactive, predicted) if self.floor else predicted
         return self._remember(obs.now, desired, current, bounds)
 
     def predict(self, obs: Observation) -> int | None:

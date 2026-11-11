@@ -231,3 +231,22 @@ class PredictiveSignalTests(unittest.TestCase):
     def test_on_the_rate_signal_it_is_the_forecast_itself(self):
         p = self.primed("rps", [2.0 + i for i in range(12)])
         self.assertEqual(p.predict(obs(ready=10, arrival_rate=13.0)), math.ceil(p.forecaster.forecast(45) / 1.4))
+
+
+class FloorTests(unittest.TestCase):
+    def test_without_the_floor_a_forecast_fall_asks_for_fewer_pods_than_the_hpa(self):
+        falling = [20.0 - i for i in range(12)]
+        with_floor, without = Predictive("rps"), Predictive("rps", floor=False, down_window_s=0.0)
+        hpa = Hpa("rps", down_window_s=0.0)
+        for i, rate in enumerate(falling, start=1):
+            o = obs(now=i * 15.0, ready=12, arrival_rate=rate)
+            a, b, c = with_floor.decide(o, BOUNDS), without.decide(o, BOUNDS), hpa.decide(o, BOUNDS)
+        self.assertLess(b, c)
+        self.assertGreaterEqual(a, c)
+
+    def test_without_the_floor_and_without_a_forecast_the_hpa_still_decides(self):
+        p = Predictive("concurrency", floor=False)
+        self.assertEqual(p.decide(obs(now=15.0, ready=4, running=48, arrival_rate=0.0), BOUNDS), 8)
+
+    def test_the_floor_is_on_by_default(self):
+        self.assertTrue(Predictive("rps").floor)
