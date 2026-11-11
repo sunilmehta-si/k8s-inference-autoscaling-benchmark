@@ -98,6 +98,11 @@ class ReadmeTests(unittest.TestCase):
             self.assertIn(option, FLAT)
         spec.parse("predict-concurrency:horizon=90,alpha=0.3,beta=0.1,floor=none")
 
+    def test_the_status_says_the_predictive_policy_is_built_in_the_model_only(self):
+        self.assertNotIn("Not yet built: a predictive policy", FLAT)
+        self.assertIn("a predictive policy that scales for the request rate one pod startup ahead, in the model, are built", FLAT)
+        self.assertIn("so the predictive policy is not checked against the real thing", FLAT)
+
     def test_the_claim_that_concurrency_beat_the_others_in_every_run_is_true(self):
         doc = results.read(ROOT / "results/signals")
         beaten = report.held(doc, "goodput", "higher")["hpa-concurrency"]

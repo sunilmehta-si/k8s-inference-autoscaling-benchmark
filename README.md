@@ -283,8 +283,9 @@ would change: on concurrency nothing, in all eight seeds; on utilization 1.5 poi
 The simulation, its seven datasets, the cluster stage's runner and comparison, the first cluster dataset, a model
 with a queue per pod and the cluster's metrics lag that matches its goodput within 3.2 points, four ramps that show
 where reactive scaling is enough, all four ramps on the cluster, and a model in which each pod's sample has its own age,
-which places the ramps' utilization flip where the cluster does, and KEDA and the external HPA reading the same signals,
-are built. Not yet built: a predictive policy.
+which places the ramps' utilization flip where the cluster does, KEDA and the external HPA reading the same signals,
+and a predictive policy that scales for the request rate one pod startup ahead, in the model, are built. Not yet built:
+a forecasting controller on the cluster, so the predictive policy is not checked against the real thing.
 
 ## Related projects
 
