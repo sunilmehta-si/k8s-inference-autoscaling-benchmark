@@ -70,8 +70,11 @@ A test regenerates every table, chart and number on this page from the saved res
 | `hpa-concurrency` | The HPA on requests in the system (running plus waiting) per pod, target 6. |
 | `hpa-queue` | The HPA on requests waiting per pod, target 1. |
 | `hpa-rps` | The HPA on requests per second over the last 30 s, per pod, target 1.4. |
+| `predict-SIGNAL` | The HPA on that signal with a forecast of the request rate one pod startup ahead beside it; never fewer pods than the HPA asks for. A model only. |
 
-Any spec takes options after a colon: `hpa-queue:target=2,down=60,startup=120,min=6`. `iab policies` lists them. The
+Any spec takes options after a colon: `hpa-queue:target=2,down=60,startup=120,min=6`. `iab policies` lists them. A
+predictive spec also takes `horizon` (seconds ahead), `alpha` and `beta` (the forecaster's weights) and `floor=none`
+(the forecast alone decides). The
 targets were chosen before any run was compared and were not tuned; the datasets above show what changing one does.
 
 ## Quick start

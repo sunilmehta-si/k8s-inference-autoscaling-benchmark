@@ -92,6 +92,12 @@ class ReadmeTests(unittest.TestCase):
                       f"and flaps {median('down-window', 'conc-down-30', 'flaps'):.0f} times", FLAT)
         self.assertIn(f"from {median('down-window', 'conc-down-300', 'goodput') * 100:.1f}% to {median('down-window', 'conc-down-30', 'goodput') * 100:.1f}%", FLAT)
 
+    def test_the_policy_table_lists_the_predictive_policy_and_its_options_parse(self):
+        self.assertIn("| `predict-SIGNAL` |", README)
+        for option in ("`horizon`", "`alpha`", "`beta`", "`floor=none`"):
+            self.assertIn(option, FLAT)
+        spec.parse("predict-concurrency:horizon=90,alpha=0.3,beta=0.1,floor=none")
+
     def test_the_claim_that_concurrency_beat_the_others_in_every_run_is_true(self):
         doc = results.read(ROOT / "results/signals")
         beaten = report.held(doc, "goodput", "higher")["hpa-concurrency"]
