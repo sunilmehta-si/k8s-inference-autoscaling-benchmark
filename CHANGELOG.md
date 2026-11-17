@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+- The simulator is llm-d-inference-sim v1.1.0, was v1.0.0 (published 3 November, adopted the day it turned 14 days old).
+  The digest is the OCI index the registry returns for the `v1.1.0` tag, resolved the same way as the one it replaces,
+  which it reproduced exactly. v1.1.0 samples latencies in nanoseconds where v1.0.0 cut each sample to whole
+  milliseconds ([llm-d-inference-sim#836](https://github.com/llm-d/llm-d-inference-sim/pull/836)), so a simulated pod
+  decodes a little slower. On the burst with `static-24`, seeds 1 to 3, v1.1.0 on the branch
+  ([run 44056555267](https://github.com/sunilmehta-si/k8s-inference-autoscaling-benchmark/actions/runs/44056555267))
+  served fewer requests in time than v1.0.0 the same morning
+  ([run 44062261531](https://github.com/sunilmehta-si/k8s-inference-autoscaling-benchmark/actions/runs/44062261531)) on
+  every seed: goodput 97.3%, 97.1% and 97.6% against 97.4%, 97.2% and 98.2%, and TTFT p95 1,113, 1,096 and 1,078 ms
+  against 1,081, 1,082 and 994 ms. `hpa-concurrency` in the branch run served 77.7% to 78.2%, inside the committed
+  74.7% to 79.4%. The datasets under `results/` stay as measured on v1.0.0; a cluster run from now on has slightly
+  slower pods than they had.
+
 ## [0.8.0] - 2026-11-11
 
 A predictive policy, and where scaling ahead of the load helps. `predict-SIGNAL` is the HPA with a forecast of the
