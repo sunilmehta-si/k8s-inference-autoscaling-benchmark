@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Changed
+- Prometheus is v3.16.0, was v3.15.0 (published 5 November, adoptable from 19 November), by the OCI index digest
+  quay.io returns for the tag, resolved the same way as the one it replaces, which it reproduced. Its changes are to
+  TLS external URLs, remote write, exemplars and query statistics; prometheus-adapter's queries and the scrapes here
+  use none of them. The committed results stay as measured with v3.15.0.
 - The simulator is llm-d-inference-sim v1.1.0, was v1.0.0 (published 3 November, adopted the day it turned 14 days old).
   The digest is the OCI index the registry returns for the `v1.1.0` tag, resolved the same way as the one it replaces,
   which it reproduced exactly. v1.1.0 samples latencies in nanoseconds where v1.0.0 cut each sample to whole
