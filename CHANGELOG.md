@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Changed
+- The simulator is llm-d-inference-sim v1.2.0, was v1.1.0 (published 10 November, adoptable from 24 November), by the
+  OCI index digest the registry returns for the tag, resolved the same way as the one it replaces, which it reproduced
+  exactly. It picks KV-cache blocks to evict without scanning every unused one and fixes streamed tool calls; nothing
+  here turns the simulator's KV cache on or streams tool calls, so the latencies the policies scale on should not move.
+  The datasets under `results/` stay as measured.
 - Prometheus is v3.16.0, was v3.15.0 (published 5 November, adoptable from 19 November), by the OCI index digest
   quay.io returns for the tag, resolved the same way as the one it replaces, which it reproduced. Its changes are to
   TLS external URLs, remote write, exemplars and query statistics; prometheus-adapter's queries and the scrapes here
